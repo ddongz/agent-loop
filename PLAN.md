@@ -69,7 +69,8 @@ Use ESM, `engines.node: ">=22.12.0"`, bin `sentinelloop: dist/index.js`, scripts
 
 ```ts
 import { describe, expect, it } from "vitest";
-import { ActionSchema, TaskStateSchema } from "../../../src/domain/action.js";
+import { ActionSchema } from "../../../src/domain/action.js";
+import { TaskStateSchema } from "../../../src/domain/task.js";
 
 it("rejects an unknown action", () => {
   expect(ActionSchema.safeParse({ version: 1, id: "a1", type: "shell", command: "rm -rf /" }).success).toBe(false);

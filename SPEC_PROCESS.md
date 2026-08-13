@@ -119,14 +119,49 @@
 
 不足：逐题确认在决策密集阶段造成较多停顿，用户随后明确要求只在关键处询问。后续采用“关键门询问、其余推荐项批量确认”的方式更高效。另一个局限是自然语言需求与测试是否充分匹配无法完全由确定性代码证明，仍需冻结前的人类确认。
 
-## 7. 陌生智能体冷启动（待执行）
+## 7. 陌生智能体冷启动
 
-按课程要求，计划完成后将使用与主开发智能体不同类型、无对话历史的新 agent，仅提供 `SPEC.md` 和 `PLAN.md`，执行 1–2 个前置实现 task，并要求不确定时停止提问。将记录：
+### 7.1 配置
 
-- 暂停点和问题；
-- 对规格的错误或不同解读；
-- 与预期的产出偏差；
-- 对 SPEC/PLAN 的修订；
-- 修订前后关键 diff。
+- 智能体：`gpt-5.6-terra`，与主开发智能体类型不同；
+- 会话：`fork_turns: none`，无先前对话或 memory；
+- 输入：仅隔离 worktree 中的 `SPEC.md` 与 `PLAN.md`；
+- 任务：尝试 Task 1–2；遇到不确定立即停止，不得猜测；
+- 隔离：分支 `validation-cold-start`，目录 `.worktrees/cold-start`；
+- 结果：智能体未创建或修改任何文件，符合暂停规则。
 
-在冷启动完成前不进入正式实现。
+### 7.2 暴露的规格缺陷
+
+1. `TaskPhase` 没有权威全集，`ANALYZE_REQUIREMENT` 等只散见于流程；
+2. 没有完整状态转移表，恢复和审批后继不明确；
+3. 八种 Action 缺少精确字段、限制和 patch 格式；
+4. ValidationResult、Issue 类别、严重度和必填字段不完整；
+5. TaskState 的 Budget、Usage、基线、审批和成功不变量不完整；
+6. PLAN 的示例从 `action.ts` 导入 `TaskStateSchema`，与文件归属冲突。
+
+冷启动产出与预期差距为 100%：在“不猜测”约束下，无法写出第一个有意义的失败契约测试。这证明主设计对共享隐性上下文依赖过强。
+
+### 7.3 修订
+
+修订前的关键表述只有概念字段：
+
+```diff
+- `phase`：显式状态枚举；
+- `budget`/`usage`：时间、token、费用和轮次；
+- 版本、ID、工具名、结构化参数；
+```
+
+修订后：
+
+```diff
++ 给出 12 个 TaskPhase 字面量和完整后继表；
++ 给出 Budget、Usage、ValidationCommand、ProtectedTestRef、PendingApproval、TaskState 全字段；
++ 给出 8 种严格 Action 判别联合及长度/默认值/patch 约束；
++ 给出 ValidationIssue、ValidationResult、Progress、Feedback 的完整接口；
++ 明确 PAUSED 恢复必须先 PRECHECK，审批只回到绑定 resumePhase；
++ 修正 PLAN 的 TaskStateSchema 导入路径为 task.ts。
+```
+
+### 7.4 复核
+
+修订完成后，将要求同一陌生智能体只依据更新后的 SPEC/PLAN 复核六个阻塞项是否解除；通过前仍不进入正式实现。

@@ -186,19 +186,118 @@ Config Service ────── User config + repository discovery
 
 ## 7. 数据模型
 
+### 7.0 权威字面量
+
+```ts
+type TaskPhase =
+  | "PRECHECK"
+  | "ANALYZE_REQUIREMENT"
+  | "GENERATE_TESTS"
+  | "CONFIRM_RED"
+  | "FREEZE_TESTS"
+  | "IMPLEMENT"
+  | "VALIDATE"
+  | "FEEDBACK"
+  | "AWAITING_APPROVAL"
+  | "PAUSED"
+  | "SUCCEEDED"
+  | "FAILED";
+
+type ActivePhase = Exclude<TaskPhase, "AWAITING_APPROVAL" | "PAUSED" | "SUCCEEDED" | "FAILED">;
+type ValidatorName = "test" | "typecheck" | "lint" | "build";
+type ValidationStatus = "passed" | "failed" | "infrastructure_error";
+type IssueSeverity = "error" | "warning";
+type ValidationIssueCategory =
+  | "TEST_ASSERTION" | "TEST_RUNTIME" | "TEST_DISCOVERY"
+  | "SYNTAX_ERROR" | "TYPE_ERROR" | "LINT_ERROR" | "BUILD_ERROR"
+  | "DEPENDENCY_ERROR" | "TIMEOUT" | "INFRASTRUCTURE_ERROR" | "UNKNOWN";
+```
+
+`REQUEST_SUCCESS_CHECK` 是 Feedback Engine 的决定，不是任务阶段。首版没有 `CANCELLED`；用户中止会保存为 `PAUSED`，原因是 `USER_INTERRUPTED`。
+
+### 7.0.1 权威状态转移
+
+不允许自循环。未列出的转移全部非法。`SUCCEEDED` 和 `FAILED` 是终态。
+
+| 当前阶段 | 允许的后继阶段 |
+|---|---|
+| PRECHECK | ANALYZE_REQUIREMENT, FAILED |
+| ANALYZE_REQUIREMENT | GENERATE_TESTS, AWAITING_APPROVAL, PAUSED, FAILED |
+| GENERATE_TESTS | CONFIRM_RED, AWAITING_APPROVAL, PAUSED, FAILED |
+| CONFIRM_RED | FREEZE_TESTS, GENERATE_TESTS, PAUSED, FAILED |
+| FREEZE_TESTS | IMPLEMENT, FAILED |
+| IMPLEMENT | VALIDATE, AWAITING_APPROVAL, PAUSED, FAILED |
+| VALIDATE | FEEDBACK, SUCCEEDED, AWAITING_APPROVAL, PAUSED, FAILED |
+| FEEDBACK | IMPLEMENT, PAUSED, FAILED |
+| AWAITING_APPROVAL | `resumePhase`, PAUSED, FAILED |
+| PAUSED | PRECHECK |
+
+进入 `AWAITING_APPROVAL` 或 `PAUSED` 时必须保存非终态 `resumePhase`。恢复 `PAUSED` 必须先进入 `PRECHECK` 复验仓库，再由预检成功逻辑返回所保存的 `resumePhase`；这是 PRECHECK 的一个恢复分支，不允许调用者跳过预检。审批批准后只能进入 `pendingApproval.resumePhase`；拒绝后进入 `PAUSED`。正常新任务的 PRECHECK 只能进入 ANALYZE_REQUIREMENT。
+
 ### 7.1 TaskState
 
-- `id`：不可变 task ID；
-- `repositoryRoot`：规范化绝对路径；
-- `requirement`：原始自然语言需求；
-- `phase`：显式状态枚举；
-- `iteration`：实现轮次；
-- `budget`/`usage`：时间、token、费用和轮次；
-- `validationPlan`：验证命令与顺序；
-- `protectedTests`：测试基线引用；
-- `pendingApproval`：待审批动作引用；
-- `lastFeedback`/`lastError`；
-- `createdAt`/`updatedAt`。
+```ts
+interface Budget {
+  maxIterations: number;       // integer 1..32, default 8
+  maxDurationMs: number;       // integer >=1000, default 1_800_000
+  maxTokens: number | null;    // positive integer or null = not enforced
+  maxCostUsd: number | null;   // positive finite number or null = not enforced
+}
+
+interface Usage {
+  iterations: number;          // non-negative integer
+  elapsedMs: number;           // non-negative integer
+  inputTokens: number;         // non-negative integer
+  outputTokens: number;        // non-negative integer
+  costUsd: number | null;      // non-negative finite number, null if provider omits cost
+}
+
+interface ValidationCommand {
+  validator: ValidatorName;
+  executable: string;          // discovered package-manager executable
+  args: string[];              // no shell string
+  timeoutMs: number;           // integer >=1000
+  enabled: boolean;
+}
+
+interface ProtectedTestRef {
+  path: string;                // normalized repository-relative POSIX path
+  sha256: string;              // 64 lowercase hex chars
+  frozenAt: string;            // ISO-8601
+}
+
+interface PendingApproval {
+  action: Action;
+  decisionReason: string;
+  requestedAt: string;
+  resumePhase: ActivePhase;
+  baselineVersion: number;
+}
+
+interface TaskState {
+  schemaVersion: 1;
+  id: string;
+  repositoryRoot: string;
+  requirement: string;
+  phase: TaskPhase;
+  resumePhase: ActivePhase | null;
+  iteration: number;
+  budget: Budget;
+  usage: Usage;
+  validationPlan: ValidationCommand[];
+  protectedTests: ProtectedTestRef[];
+  baselineVersion: number;
+  pendingApproval: PendingApproval | null;
+  lastFeedback: Feedback | null;
+  lastError: SerializedSentinelError | null;
+  lastCodeChangeAt: string | null;
+  finalValidationAt: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+```
+
+所有字段必填；可缺省概念使用显式 `null` 或空数组。`phase === "SUCCEEDED"` 时必须满足：`finalValidationAt !== null`、`lastCodeChangeAt === null || finalValidationAt >= lastCodeChangeAt`、`pendingApproval === null`、所有启用验证器最后结果通过且受保护测试哈希一致。其他阶段不得依靠 schema 单独推断业务成功。
 
 ### 7.2 Event
 
@@ -209,9 +308,35 @@ Config Service ────── User config + repository discovery
 
 ### 7.3 Action / Observation
 
-- 版本、ID、工具名、结构化参数；
-- 策略结果；
-- 执行状态、耗时、截断输出和统一错误。
+所有 Action 使用严格判别联合，未知字段被拒绝：
+
+```ts
+interface ActionBase { version: 1; id: string; rationale: string; }
+type Action =
+  | (ActionBase & { type: "read_file"; path: string; maxBytes?: number })
+  | (ActionBase & { type: "list_files"; path?: string; maxDepth?: number; maxEntries?: number })
+  | (ActionBase & { type: "search_files"; query: string; path?: string; glob?: string; maxResults?: number })
+  | (ActionBase & { type: "create_file"; path: string; content: string })
+  | (ActionBase & { type: "apply_patch"; path: string; patch: string })
+  | (ActionBase & { type: "run_validation"; validator: ValidatorName | "all" })
+  | (ActionBase & { type: "finish"; summary: string })
+  | (ActionBase & { type: "request_clarification"; question: string });
+```
+
+约束：`id` 1..64 字符；`rationale`/`summary`/`question` 1..2000；路径 1..4096；`maxBytes` 1..1,048,576，默认 65,536；`maxDepth` 0..20，默认 5；`maxEntries`/`maxResults` 1..1000，默认 200；`query` 1..1000；`glob` 1..500；`content`/`patch` 最大 1 MiB。`apply_patch.patch` 是只针对 `path` 的 unified diff，文件头必须与该路径一致；不能在一个动作中修改多个文件。`run_validation` 只引用已发现的 ValidationCommand，不能携带命令。
+
+```ts
+interface Observation {
+  actionId: string;
+  tool: Action["type"];
+  status: "succeeded" | "failed" | "denied" | "approval_required";
+  startedAt: string;
+  durationMs: number;
+  output: string;
+  truncated: boolean;
+  error: SerializedSentinelError | null;
+}
+```
 
 ### 7.4 TestBaseline
 
@@ -223,10 +348,49 @@ Config Service ────── User config + repository discovery
 
 ### 7.5 ValidationResult / Issue / Feedback
 
-- 验证器、状态、退出码、耗时；
-- issue 类别、严重度、文件、规则/测试名、标准化消息和指纹；
-- progress 类型、解决/新增/重复问题；
-- 给 LLM 的紧凑反馈与停止建议。
+```ts
+interface ValidationIssue {
+  category: ValidationIssueCategory;
+  severity: IssueSeverity;
+  message: string;
+  file: string | null;
+  line: number | null;
+  column: number | null;
+  rule: string | null;
+  testName: string | null;
+  fingerprint: string;
+}
+
+interface ValidationResult {
+  validator: ValidatorName;
+  status: ValidationStatus;
+  exitCode: number | null;
+  command: { executable: string; args: string[] };
+  startedAt: string;
+  durationMs: number;
+  issues: ValidationIssue[];
+  stdoutSummary: string;
+  stderrSummary: string;
+  stdoutTruncated: boolean;
+  stderrTruncated: boolean;
+}
+
+type Progress =
+  | { kind: "improved"; resolved: string[]; introduced: string[] }
+  | { kind: "unchanged"; repeated: string[] }
+  | { kind: "regressed"; introduced: string[] }
+  | { kind: "oscillating"; cycleLength: 2 | 3 };
+
+interface Feedback {
+  decision: "CONTINUE" | "PAUSE_NO_PROGRESS" | "PAUSE_BUDGET" | "REQUEST_SUCCESS_CHECK" | "FAIL_INFRASTRUCTURE";
+  summary: string;
+  currentStage: ValidatorName | null;
+  progress: Progress | null;
+  issues: ValidationIssue[];
+  remainingIterations: number;
+  createdAt: string;
+}
+```
 
 ## 8. 领域与机制设计
 

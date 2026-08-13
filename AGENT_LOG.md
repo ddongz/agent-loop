@@ -33,3 +33,13 @@
 - The original common requirements mandate an accessible WebUI, while the user reports a later teaching-assistant clarification allowing a Release link instead. The project follows the newer course clarification and remains CLI-only.
 - This log is being initialized during the specification phase and will be updated per implementation task with prompts, subagents, red/green evidence, reviews and commit hashes.
 - The brainstorming skill normally requests a second explicit review after writing the spec file. The user had already approved each critical design section and then explicitly instructed the agent to use recommended choices for remaining design and continue without routine pauses. That instruction is treated as authorization to transition after inline spec self-review.
+
+## 2026-08-14 — Cold-start specification validation
+
+- Task: SPEC-02
+- Skills: `writing-plans`, `using-git-worktrees`; different-type fresh agent validation.
+- Context: a `gpt-5.6-terra` agent with no forked turns received only `SPEC.md` and `PLAN.md` in `validation-cold-start`.
+- Result: it correctly stopped without writing code. It found missing phase literals/transition matrix, incomplete Action/Validation/TaskState schemas, and a PLAN import contradiction.
+- Human intervention: none; user had authorized recommended non-critical decisions and continuous progress.
+- Revision: added authoritative literal unions, transitions, object schemas, invariants and corrected import ownership. Full before/after summary is in `SPEC_PROCESS.md` §7.
+- Lesson: prose architecture can feel complete to its authors while still being unusable as an independent programming contract; cold-start validation exposed this before implementation cost was incurred.
