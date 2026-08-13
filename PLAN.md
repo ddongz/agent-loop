@@ -102,7 +102,7 @@ git add package.json tsconfig.json vitest.config.ts eslint.config.js src/domain 
 git commit -m "feat(domain): define harness contracts"
 ```
 
-### Task 2: Explicit transition table and durable task store
+### Task 2: Explicit transition table and durable task store — COMPLETE (`8833092`, `7d92506`, `37705c1`)
 
 **Files:**
 - Create: `src/state/transition-table.ts`, `src/state/task-store.ts`, `src/state/event-store.ts`
@@ -112,7 +112,7 @@ git commit -m "feat(domain): define harness contracts"
 - Consumes: `TaskPhase`, `TaskState` and Zod schemas from Task 1.
 - Produces: `canTransition(state: TaskState, to: TaskPhase): boolean`; `transition(state: TaskState, to: TaskPhase, now: string): TaskState`; `TaskStore.create/load/save`; `EventStore.append/list`.
 
-- [ ] **Step 1: Write failing transition tests**
+- [x] **Step 1: Write failing transition tests**
 
 ```ts
 expect(canTransition(precheckState, "ANALYZE_REQUIREMENT")).toBe(true);
@@ -120,29 +120,29 @@ expect(canTransition(generateTestsState, "IMPLEMENT")).toBe(false);
 expect(canTransition(validatedState, "SUCCEEDED")).toBe(true);
 ```
 
-- [ ] **Step 2: Run and confirm the missing implementation failure**
+- [x] **Step 2: Run and confirm the missing implementation failure**
 
 Run: `npm test -- tests/unit/state/transition-table.test.ts`  
 Expected: FAIL with unresolved module.
 
-- [ ] **Step 3: Implement a total, explicit transition table**
+- [x] **Step 3: Implement a total, explicit transition table**
 
 Include all phases from the specification and export `transition(state, next, now)` that rejects illegal transitions with `INVALID_TRANSITION`.
 
-- [ ] **Step 4: Write failing atomic persistence/recovery tests**
+- [x] **Step 4: Write failing atomic persistence/recovery tests**
 
 Create a temporary `.sentinelloop/tasks/t1`, save a state and two events, instantiate new stores, then assert schema-validated recovery and monotonic event sequence.
 
-- [ ] **Step 5: Implement atomic JSON state and append-only JSONL events**
+- [x] **Step 5: Implement atomic JSON state and append-only JSONL events**
 
 Write state through a same-directory temporary file and rename; fsync before rename where supported. Reject corrupted state rather than guessing defaults.
 
-- [ ] **Step 6: Run focused and full checks**
+- [x] **Step 6: Run focused and full checks**
 
 Run: `npm test -- tests/unit/state tests/integration/state && npm run typecheck`  
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/state tests/unit/state tests/integration/state

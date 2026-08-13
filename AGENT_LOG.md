@@ -77,3 +77,14 @@
 - Commits: `80933cc` (initial implementation), `ca943d3` (review fixes).
 - Human intervention: none.
 - Lesson: schema contracts need positive fixtures and mutation-style negative cases; checking only rejection paths can make a suite pass vacuously.
+
+## 2026-08-14 — Task 2 state machine and durable persistence
+
+- Task: IMPL-02, explicit transition table, atomic task state, append-only events, and recovery validation.
+- TDD evidence: initial missing-module REDs; review fix round 1 added 19 focused cases with 5 expected failures; round 2 added recovery/approval guards with 2 expected failures before implementation.
+- Green evidence: 23/23 focused state tests and 34/34 full tests passed; typecheck, lint, build and diff-check passed.
+- Review history: initial review found six Important issues. Four contract defects and related hardening were fixed in `7d92506`; cross-process multi-writer locks were ruled outside v1's explicit single-Agent/single-writer scope. First re-review found two remaining issues; `37705c1` fixed write-time recovery validation and approval context guards, strengthened write-adjacent path checks/no-follow behavior, and clarified the declared pure-Node TOCTOU residual risk.
+- Final verdict: 0 Critical, 0 Important; Spec Compliance PASS and Task Quality PASS. One Minor remains: a write-boundary symlink test does not precisely distinguish the entry check from the final check, though the implementation has both.
+- Commits: `8833092`, `7d92506`, `37705c1`.
+- Human intervention: none.
+- Lesson: a security threat table must distinguish guaranteed controls from residual OS-level races; tests and documentation should not imply stronger atomicity than the runtime can provide.
