@@ -6,7 +6,7 @@
 
 **Architecture:** A dependency-injected `TaskOrchestrator` owns all phase transitions. Untrusted LLM actions pass through runtime schemas, policy evaluation, and a structured tool dispatcher before execution; validation output is normalized into fingerprints and progress decisions that control continuation or pause. JSON/JSONL persistence enables recovery, while real LLM and OS credential adapters remain replaceable by deterministic test doubles.
 
-**Tech Stack:** TypeScript 7, Node.js >=22.12.0, ESM, Commander 15, Zod 4, Vitest 4, OpenAI JavaScript SDK 6, Node built-ins, npm packaging, GitHub Actions and GitLab CI.
+**Tech Stack:** TypeScript 6.0.3, Node.js >=22.12.0, ESM, Commander 15, Zod 4, Vitest 4, OpenAI JavaScript SDK 6, Node built-ins, npm packaging, GitHub Actions and GitLab CI. TypeScript 7.0.2 was evaluated during Task 1 but rejected because the current `typescript-eslint@8.67.0` peer range is `<6.1.0` and its loader hard-fails on TS7; the supported TS6 baseline keeps lint deterministic.
 
 ## Global Constraints
 

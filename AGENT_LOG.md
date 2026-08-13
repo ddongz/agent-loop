@@ -58,3 +58,11 @@
 - Agent verdict: PASS at specification commit `28dc209`.
 - Evidence: the unfamiliar agent confirmed all 10 blockers now have directly testable authoritative definitions and still made no implementation changes.
 - Decision: specification gate is open; formal implementation may start under worktree + subagent + TDD + two-stage review.
+
+## 2026-08-14 — Task 1 dependency compatibility decision
+
+- Task: IMPL-01 fix round 1
+- Trigger: plan initially named TypeScript 7; installing 7.0.2 made `typescript-eslint@8.67.0` hard-fail because its supported peer range is `>=4.8.4 <6.1.0`.
+- Investigation: TypeScript 7 typecheck passed, but lint failed before analyzing source; `npm ls` confirmed every typescript-eslint package marked TS7 invalid.
+- Decision: use TypeScript 6.0.3, the newest stable line inside the supported range, rather than disabling warnings or shipping an unsupported toolchain.
+- Human intervention: none; the user authorized recommended non-critical design and dependency choices.

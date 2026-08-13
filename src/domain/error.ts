@@ -2,6 +2,17 @@ import { z } from "zod";
 
 export type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
 
+export const JsonValueSchema: z.ZodType<JsonValue> = z.lazy(() =>
+  z.union([
+    z.null(),
+    z.boolean(),
+    z.number().finite(),
+    z.string(),
+    z.array(JsonValueSchema),
+    z.record(z.string(), JsonValueSchema)
+  ])
+);
+
 export const SentinelErrorCodeSchema = z.enum([
   "INVALID_INPUT", "INVALID_CONFIG", "INVALID_TRANSITION", "DIRTY_WORKTREE", "UNSUPPORTED_NODE_VERSION", "NOT_GIT_REPOSITORY",
   "PACKAGE_JSON_MISSING", "PACKAGE_MANAGER_CONFLICT", "TEST_COMMAND_MISSING", "PATH_ESCAPE", "PROTECTED_TEST", "POLICY_DENIED",
@@ -23,13 +34,15 @@ export const ErrorDefaults: Readonly<Record<SentinelErrorCode, Readonly<{ retrya
   PERSISTENCE_FAILED: { retryable: true, recoverable: false }, INTERNAL: { retryable: false, recoverable: false }
 };
 
-export const SerializedSentinelErrorSchema = z.object({
-  code: SentinelErrorCodeSchema,
-  message: z.string(),
-  retryable: z.boolean(),
-  recoverable: z.boolean(),
-  detail: z.record(z.string(), z.unknown()).nullable()
-}).strict();
+export const SerializedSentinelErrorSchema = z
+  .object({
+    code: SentinelErrorCodeSchema,
+    message: z.string(),
+    retryable: z.boolean(),
+    recoverable: z.boolean(),
+    detail: z.record(z.string(), JsonValueSchema).nullable()
+  })
+  .strict();
 export type SerializedSentinelError = z.infer<typeof SerializedSentinelErrorSchema>;
 
 export interface SentinelErrorOptions {

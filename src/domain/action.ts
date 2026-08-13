@@ -8,15 +8,30 @@ const ActionBaseSchema = z.object({
   version: z.literal(1),
   id: z.string().min(1).max(64),
   rationale: z.string().min(1).max(2_000)
-});
+}).strict();
 const pathSchema = z.string().min(1).max(4_096);
+const patchSchema = z.string().max(MiB);
+
+const ApplyPatchSchema = ActionBaseSchema.extend({
+  type: z.literal("apply_patch"),
+  path: pathSchema,
+  patch: patchSchema
+})
+  .strict()
+  .superRefine(({ path, patch }, context) => {
+    const headerMatches = [...patch.matchAll(/^(---|\+\+\+)\s+(?:a\/|b\/)?([^\t\r\n ]+)/gm)];
+    const headers = headerMatches.map((match) => match[2]);
+    if (headerMatches.length !== 2 || headers[0] !== path || headers[1] !== path || !patch.includes(`--- a/${path}`) || !patch.includes(`+++ b/${path}`)) {
+      context.addIssue({ code: "custom", message: "Patch must contain exactly one matching unified diff file header pair." });
+    }
+  });
 
 export const ActionSchema = z.discriminatedUnion("type", [
   ActionBaseSchema.extend({ type: z.literal("read_file"), path: pathSchema, maxBytes: z.number().int().min(1).max(MiB).default(65_536) }).strict(),
   ActionBaseSchema.extend({ type: z.literal("list_files"), path: pathSchema.optional(), maxDepth: z.number().int().min(0).max(20).default(5), maxEntries: z.number().int().min(1).max(1_000).default(200) }).strict(),
   ActionBaseSchema.extend({ type: z.literal("search_files"), query: z.string().min(1).max(1_000), path: pathSchema.optional(), glob: z.string().min(1).max(500).optional(), maxResults: z.number().int().min(1).max(1_000).default(200) }).strict(),
   ActionBaseSchema.extend({ type: z.literal("create_file"), path: pathSchema, content: z.string().max(MiB) }).strict(),
-  ActionBaseSchema.extend({ type: z.literal("apply_patch"), path: pathSchema, patch: z.string().max(MiB) }).strict(),
+  ApplyPatchSchema,
   ActionBaseSchema.extend({ type: z.literal("run_validation"), validator: z.union([ValidatorNameSchema, z.literal("all")]) }).strict(),
   ActionBaseSchema.extend({ type: z.literal("finish"), summary: z.string().min(1).max(2_000) }).strict(),
   ActionBaseSchema.extend({ type: z.literal("request_clarification"), question: z.string().min(1).max(2_000) }).strict()
