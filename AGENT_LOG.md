@@ -66,3 +66,14 @@
 - Investigation: TypeScript 7 typecheck passed, but lint failed before analyzing source; `npm ls` confirmed every typescript-eslint package marked TS7 invalid.
 - Decision: use TypeScript 6.0.3, the newest stable line inside the supported range, rather than disabling warnings or shipping an unsupported toolchain.
 - Human intervention: none; the user authorized recommended non-critical design and dependency choices.
+
+## 2026-08-14 — Task 1 implementation and review closure
+
+- Task: IMPL-01, package foundation and domain contracts.
+- Implementer: fresh `gpt-5.6-terra` subagent using test-driven development.
+- Red evidence: the focused contract test initially failed because the domain modules did not exist; the review-fix test run then exposed 5/11 and 6/11 failing invariant cases before production changes.
+- Green evidence: 11/11 focused tests passed, followed by passing typecheck and lint; `npm audit` reported zero vulnerabilities.
+- Review: the first review identified incomplete persisted-event/baseline schemas and several invariant edge cases. Fix round 1 addressed all Critical/Important findings. A fresh scoped re-review returned Spec Compliance PASS and Task Quality PASS, with transition behavior explicitly deferred to Task 2 by plan ownership.
+- Commits: `80933cc` (initial implementation), `ca943d3` (review fixes).
+- Human intervention: none.
+- Lesson: schema contracts need positive fixtures and mutation-style negative cases; checking only rejection paths can make a suite pass vacuously.

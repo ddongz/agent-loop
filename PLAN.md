@@ -50,7 +50,7 @@ scripts/mechanism-demo.ts
 
 ---
 
-### Task 1: Package foundation and domain contracts
+### Task 1: Package foundation and domain contracts — COMPLETE (`80933cc`, `ca943d3`)
 
 **Files:**
 - Create: `package.json`, `tsconfig.json`, `vitest.config.ts`, `eslint.config.js`
@@ -61,11 +61,11 @@ scripts/mechanism-demo.ts
 - Produces: `TaskPhase`, `TaskState`, `Budget`, `Action`, `Observation`, `ValidationResult`, `ValidationIssue`, `Feedback`, `SentinelError`.
 - Consumes: no implementation interfaces.
 
-- [ ] **Step 1: Add package/tooling manifests without source implementation**
+- [x] **Step 1: Add package/tooling manifests without source implementation**
 
 Use ESM, `engines.node: ">=22.12.0"`, bin `sentinelloop: dist/index.js`, scripts `build`, `test`, `typecheck`, `lint`, `check`, and dependencies `commander`, `openai`, `zod`; dev dependencies include TypeScript, Vitest, ESLint and types.
 
-- [ ] **Step 2: Write failing schema contract tests**
+- [x] **Step 2: Write failing schema contract tests**
 
 ```ts
 import { describe, expect, it } from "vitest";
@@ -81,21 +81,21 @@ it("rejects success without final validation", () => {
 });
 ```
 
-- [ ] **Step 3: Run the focused test and record the red result**
+- [x] **Step 3: Run the focused test and record the red result**
 
 Run: `npm test -- tests/unit/domain/contracts.test.ts`  
 Expected: FAIL because domain modules do not exist.
 
-- [ ] **Step 4: Implement strict Zod schemas and inferred types**
+- [x] **Step 4: Implement strict Zod schemas and inferred types**
 
 Define discriminated action types for `read_file`, `list_files`, `search_files`, `create_file`, `apply_patch`, `run_validation`, `finish`, and `request_clarification`; define task phases and validation issue categories exactly as specified in `SPEC.md`.
 
-- [ ] **Step 5: Run domain tests, typecheck and lint**
+- [x] **Step 5: Run domain tests, typecheck and lint**
 
 Run: `npm test -- tests/unit/domain/contracts.test.ts && npm run typecheck && npm run lint`  
 Expected: all commands PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add package.json tsconfig.json vitest.config.ts eslint.config.js src/domain tests/unit/domain
