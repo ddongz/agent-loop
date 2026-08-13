@@ -1,4 +1,4 @@
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -114,6 +114,49 @@ describe("durable task state", () => {
     await expect(store.load("t1")).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
   });
 
+  it("rejects persisted pause and approval states that cannot be resumed", async () => {
+    const corruptions = [
+      { ...makeState(), phase: "PAUSED", resumePhase: null },
+      { ...makeState(), phase: "AWAITING_APPROVAL", resumePhase: "IMPLEMENT", pendingApproval: null },
+      {
+        ...makeState(),
+        phase: "AWAITING_APPROVAL",
+        resumePhase: "VALIDATE",
+        pendingApproval: {
+          action: { version: 1, id: "a1", rationale: "Needs approval", type: "create_file", path: "src/new.ts", content: "" },
+          decisionReason: "Creates a file",
+          requestedAt: TIMESTAMPS[1],
+          resumePhase: "IMPLEMENT",
+          baselineVersion: 0
+        }
+      }
+    ];
+
+    for (const state of corruptions) {
+      const root = await makeRoot();
+      const directory = join(root, ".sentinelloop", "tasks", "t1");
+      await mkdir(directory, { recursive: true });
+      await writeFile(join(directory, "state.json"), JSON.stringify(state), "utf8");
+      await expect(new TaskStore(root).load("t1")).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
+    }
+  });
+
+  it("rejects storage paths redirected outside the repository by symlinks", async () => {
+    const root = await makeRoot();
+    const outside = await makeRoot();
+    await mkdir(join(root, ".sentinelloop"), { recursive: true });
+    try {
+      await symlink(outside, join(root, ".sentinelloop", "tasks"), process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(code ?? "")) return;
+      throw error;
+    }
+
+    await expect(new TaskStore(root).create(makeState())).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+    await expect(new EventStore(root).list("t1")).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
+  });
+
   it("does not let save or event access silently create an unknown task", async () => {
     const root = await makeRoot();
     const state = makeState();
@@ -167,5 +210,38 @@ describe("durable task state", () => {
     }))).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
 
     await expect(store.append("t1", event({ sequence: 99 } as Partial<NewTaskEvent>))).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
+  });
+
+  it("enforces explicit-null reference semantics for every event type", async () => {
+    const actionTypes: TaskEvent["type"][] = [
+      "ACTION_REQUESTED", "POLICY_DECIDED", "ACTION_COMPLETED", "APPROVAL_REQUESTED", "APPROVAL_RESOLVED"
+    ];
+    const nonActionTypes: TaskEvent["type"][] = [
+      "TASK_CREATED", "PHASE_CHANGED", "VALIDATION_COMPLETED", "FEEDBACK_CREATED", "BASELINE_FROZEN",
+      "TASK_PAUSED", "TASK_RESUMED", "TASK_SUCCEEDED", "TASK_FAILED", "USER_INTERRUPTED"
+    ];
+    const invalid: NewTaskEvent[] = [
+      ...actionTypes.map((type, index) => event({
+        id: `action-${index}`,
+        type,
+        phaseBefore: type === "ACTION_REQUESTED" ? "IMPLEMENT" : null,
+        phaseAfter: null,
+        actionId: null
+      })),
+      ...nonActionTypes.map((type, index) => event({
+        id: `non-action-${index}`,
+        type,
+        phaseBefore: type === "TASK_CREATED" ? null : "IMPLEMENT",
+        phaseAfter: type === "TASK_CREATED" ? "PRECHECK" : "IMPLEMENT",
+        actionId: "unexpected"
+      })),
+      event({ id: "observation-on-wrong-event", type: "VALIDATION_COMPLETED", observationActionId: "a1" })
+    ];
+
+    for (const [index, input] of invalid.entries()) {
+      const root = await makeRoot();
+      await new TaskStore(root).create(makeState());
+      await expect(new EventStore(root).append("t1", { ...input, id: `e-${index}` })).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
+    }
   });
 });

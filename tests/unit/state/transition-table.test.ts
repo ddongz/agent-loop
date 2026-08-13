@@ -187,6 +187,43 @@ describe("transition table", () => {
     });
   });
 
+  it("uses the same success guard when stale approval context remains", () => {
+    const completedAt = "2026-08-14T00:03:00.000Z";
+    const pendingApproval = {
+      action: { version: 1 as const, id: "a1", rationale: "Needs approval", type: "create_file" as const, path: "src/new.ts", content: "" },
+      decisionReason: "Creates a file",
+      requestedAt: UPDATED_AT,
+      resumePhase: "IMPLEMENT" as const,
+      baselineVersion: 0
+    };
+    const stale = makeState("VALIDATE", {
+      pendingApproval,
+      finalValidationAt: completedAt,
+      finalValidation: {
+        results: [],
+        baselineVerified: true,
+        workspacePolicyVerified: true,
+        codeVersion: "a".repeat(64),
+        completedAt
+      }
+    });
+
+    expect(canTransition(stale, "SUCCEEDED")).toBe(false);
+    expect(() => transition(stale, "SUCCEEDED", NEXT_AT)).toThrowError(
+      expect.objectContaining<Partial<SentinelError>>({ code: "INVALID_TRANSITION" })
+    );
+  });
+
+  it("rejects invalid or regressing transition timestamps with INVALID_TRANSITION", () => {
+    const state = makeState("PRECHECK");
+
+    for (const now of ["not-a-time", CREATED_AT]) {
+      expect(() => transition(state, "ANALYZE_REQUIREMENT", now)).toThrowError(
+        expect.objectContaining<Partial<SentinelError>>({ code: "INVALID_TRANSITION" })
+      );
+    }
+  });
+
   it("throws INVALID_TRANSITION without mutating state", () => {
     const state = makeState("GENERATE_TESTS");
 

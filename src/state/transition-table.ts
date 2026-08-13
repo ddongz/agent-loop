@@ -37,7 +37,6 @@ function isAllowed(state: TaskState, to: TaskPhase): boolean {
     return TaskStateSchema.safeParse({
       ...state,
       phase: to,
-      pendingApproval: null,
       resumePhase: null
     }).success;
   }
@@ -54,12 +53,11 @@ export function canTransition(state: TaskState, to: TaskPhase): boolean {
 }
 
 export function transition(state: TaskState, to: TaskPhase, now: string): TaskState {
-  if (!isAllowed(state, to)) {
-    throw new SentinelError({
-      code: "INVALID_TRANSITION",
-      message: `Cannot transition task ${state.id} from ${state.phase} to ${to}.`,
-      detail: { taskId: state.id, from: state.phase, to }
-    });
+  if (!isAllowed(state, to)) throw invalidTransition(state, to);
+  const nextTimestamp = Date.parse(now);
+  const previousTimestamp = Date.parse(state.updatedAt);
+  if (!Number.isFinite(nextTimestamp) || !Number.isFinite(previousTimestamp) || nextTimestamp < previousTimestamp) {
+    throw invalidTransition(state, to, "Transition timestamp is invalid or predates the current state.");
   }
 
   const isTerminal = to === "SUCCEEDED" || to === "FAILED";
@@ -76,5 +74,13 @@ export function transition(state: TaskState, to: TaskPhase, now: string): TaskSt
     resumePhase,
     pendingApproval: state.phase === "AWAITING_APPROVAL" ? null : state.pendingApproval,
     updatedAt: now
+  });
+}
+
+function invalidTransition(state: TaskState, to: TaskPhase, message?: string): SentinelError {
+  return new SentinelError({
+    code: "INVALID_TRANSITION",
+    message: message ?? `Cannot transition task ${state.id} from ${state.phase} to ${to}.`,
+    detail: { taskId: state.id, from: state.phase, to }
   });
 }

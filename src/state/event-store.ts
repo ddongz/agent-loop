@@ -1,8 +1,8 @@
 /// <reference types="node" />
 
 import { constants } from "node:fs";
-import { access, mkdir, open, readFile } from "node:fs/promises";
-import { join } from "node:path";
+import { access, lstat, mkdir, open, readFile, realpath } from "node:fs/promises";
+import { isAbsolute, join, relative, resolve } from "node:path";
 
 import { SentinelError } from "../domain/error.js";
 import { TaskEventSchema, type TaskEvent } from "../domain/task.js";
@@ -42,6 +42,7 @@ export class EventStore {
 
   async list(taskId: string): Promise<TaskEvent[]> {
     assertSafeTaskId(taskId);
+    await this.assertSafeStoragePath(taskId);
     await this.assertTaskExists(taskId);
     let contents: string;
     try {
@@ -104,6 +105,33 @@ export class EventStore {
       });
     }
   }
+
+  private async assertSafeStoragePath(taskId: string): Promise<void> {
+    const repositoryRoot = resolve(this.repositoryRoot);
+    let rootReal: string;
+    try {
+      rootReal = await realpath(repositoryRoot);
+    } catch (error) {
+      throw corruptEventError("Repository root cannot be resolved for storage.", taskId, error);
+    }
+
+    const storageRoot = join(repositoryRoot, ".sentinelloop", "tasks");
+    for (const candidate of [join(repositoryRoot, ".sentinelloop"), storageRoot, join(storageRoot, taskId)]) {
+      try {
+        const stat = await lstat(candidate);
+        if (stat.isSymbolicLink()) throw corruptEventError("Task storage path cannot traverse a symbolic link.", taskId);
+        const candidateReal = await realpath(candidate);
+        const path = relative(rootReal, candidateReal);
+        if (path !== "" && (isAbsolute(path) || path === ".." || path.startsWith(`..${process.platform === "win32" ? "\\" : "/"}`))) {
+          throw corruptEventError("Task storage path escapes the repository.", taskId);
+        }
+      } catch (error) {
+        if (isNodeError(error) && error.code === "ENOENT") break;
+        if (error instanceof SentinelError) throw error;
+        throw corruptEventError("Task storage ancestry cannot be verified.", taskId, error);
+      }
+    }
+  }
 }
 
 function parseEvent(value: unknown, taskId: string): TaskEvent {
@@ -133,8 +161,17 @@ function validateEventSemantics(event: TaskEvent, taskId: string): void {
   if (event.type === "PHASE_CHANGED" && (event.phaseBefore === null || event.phaseAfter === null)) {
     throw corruptEventError("PHASE_CHANGED requires both phases.", taskId);
   }
-  if (["ACTION_REQUESTED", "POLICY_DECIDED", "ACTION_COMPLETED"].includes(event.type) && event.actionId === null) {
+  const actionEvents: readonly TaskEvent["type"][] = [
+    "ACTION_REQUESTED", "POLICY_DECIDED", "ACTION_COMPLETED", "APPROVAL_REQUESTED", "APPROVAL_RESOLVED"
+  ];
+  if (actionEvents.includes(event.type) && event.actionId === null) {
     throw corruptEventError(`${event.type} requires an action ID.`, taskId);
+  }
+  if (!actionEvents.includes(event.type) && event.actionId !== null) {
+    throw corruptEventError(`${event.type} requires an explicit null action ID.`, taskId);
+  }
+  if (event.type !== "ACTION_COMPLETED" && event.observationActionId !== null) {
+    throw corruptEventError(`${event.type} requires an explicit null observation action ID.`, taskId);
   }
   if (event.type === "ACTION_COMPLETED" && event.observationActionId !== null && event.observationActionId !== event.actionId) {
     throw corruptEventError("ACTION_COMPLETED observation must refer to the same action.", taskId);
