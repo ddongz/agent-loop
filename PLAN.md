@@ -110,14 +110,14 @@ git commit -m "feat(domain): define harness contracts"
 
 **Interfaces:**
 - Consumes: `TaskPhase`, `TaskState` and Zod schemas from Task 1.
-- Produces: `canTransition(from: TaskPhase, to: TaskPhase): boolean`; `TaskStore.create/load/save`; `EventStore.append/list`.
+- Produces: `canTransition(state: TaskState, to: TaskPhase): boolean`; `transition(state: TaskState, to: TaskPhase, now: string): TaskState`; `TaskStore.create/load/save`; `EventStore.append/list`.
 
 - [ ] **Step 1: Write failing transition tests**
 
 ```ts
-expect(canTransition("PRECHECK", "ANALYZE_REQUIREMENT")).toBe(true);
-expect(canTransition("GENERATE_TESTS", "IMPLEMENT")).toBe(false);
-expect(canTransition("VALIDATE", "SUCCEEDED")).toBe(true);
+expect(canTransition(precheckState, "ANALYZE_REQUIREMENT")).toBe(true);
+expect(canTransition(generateTestsState, "IMPLEMENT")).toBe(false);
+expect(canTransition(validatedState, "SUCCEEDED")).toBe(true);
 ```
 
 - [ ] **Step 2: Run and confirm the missing implementation failure**

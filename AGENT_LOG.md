@@ -43,3 +43,11 @@
 - Human intervention: none; user had authorized recommended non-critical decisions and continuous progress.
 - Revision: added authoritative literal unions, transitions, object schemas, invariants and corrected import ownership. Full before/after summary is in `SPEC_PROCESS.md` §7.
 - Lesson: prose architecture can feel complete to its authors while still being unusable as an independent programming contract; cold-start validation exposed this before implementation cost was incurred.
+
+## 2026-08-14 — Cold-start review round 2
+
+- Task: SPEC-03
+- Context: the same isolated unfamiliar agent reviewed only the revised SPEC/PLAN and did not implement.
+- Result: original six blockers were resolved; deeper contract gaps remained for serialized errors, durable events, state-dependent recovery transitions and success evidence.
+- Revision: defined error-code and serialization contracts, complete TaskEvent schema/recovery invariants, stateful transition APIs, and ValidationSnapshot-backed success refinements.
+- Lesson: resolving surface type names is insufficient; persistence and state-machine APIs must carry enough evidence to enforce their declared invariants.

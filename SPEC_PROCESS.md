@@ -164,4 +164,15 @@
 
 ### 7.4 复核
 
-修订完成后，将要求同一陌生智能体只依据更新后的 SPEC/PLAN 复核六个阻塞项是否解除；通过前仍不进入正式实现。
+第一次修订后，同一陌生智能体继续只依据 SPEC/PLAN 复核。原六项已经解除，但又发现四个下钻阻塞：`SentinelError`/序列化错误未定义、Event 缺少持久化 schema、无状态 `canTransition(from,to)` 无法验证动态恢复、成功状态缺少验证快照。
+
+第二次修订增加：
+
+```diff
++ SentinelErrorCode 全集、SerializedSentinelError 与转换契约；
++ TaskEvent/EventType/JsonValue 的完整持久化 schema 与恢复不变量；
++ canTransition(state,to) 和 transition(state,to,now) 状态化 API；
++ ValidationSnapshot，并明确 schema 与文件系统业务检查的职责边界。
+```
+
+第二次修订后再次复核；通过前仍不进入正式实现。

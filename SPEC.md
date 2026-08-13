@@ -211,6 +211,17 @@ type ValidationIssueCategory =
   | "TEST_ASSERTION" | "TEST_RUNTIME" | "TEST_DISCOVERY"
   | "SYNTAX_ERROR" | "TYPE_ERROR" | "LINT_ERROR" | "BUILD_ERROR"
   | "DEPENDENCY_ERROR" | "TIMEOUT" | "INFRASTRUCTURE_ERROR" | "UNKNOWN";
+
+type SentinelErrorCode =
+  | "INVALID_INPUT" | "INVALID_CONFIG" | "INVALID_TRANSITION"
+  | "DIRTY_WORKTREE" | "UNSUPPORTED_NODE_VERSION" | "NOT_GIT_REPOSITORY"
+  | "PACKAGE_JSON_MISSING" | "PACKAGE_MANAGER_CONFLICT" | "TEST_COMMAND_MISSING"
+  | "PATH_ESCAPE" | "PROTECTED_TEST" | "POLICY_DENIED" | "APPROVAL_REQUIRED"
+  | "UNKNOWN_ACTION" | "INVALID_ACTION" | "PATCH_CONFLICT" | "TOOL_TIMEOUT"
+  | "VALIDATION_INFRASTRUCTURE" | "LLM_AUTH" | "LLM_RATE_LIMIT" | "LLM_TIMEOUT"
+  | "LLM_UNAVAILABLE" | "LLM_PROTOCOL" | "SCRIPT_NO_MATCH"
+  | "CREDENTIAL_BACKEND_UNAVAILABLE" | "TASK_NOT_FOUND" | "STATE_CORRUPT"
+  | "PERSISTENCE_FAILED" | "INTERNAL";
 ```
 
 `REQUEST_SUCCESS_CHECK` 是 Feedback Engine 的决定，不是任务阶段。首版没有 `CANCELLED`；用户中止会保存为 `PAUSED`，原因是 `USER_INTERRUPTED`。
@@ -221,7 +232,7 @@ type ValidationIssueCategory =
 
 | 当前阶段 | 允许的后继阶段 |
 |---|---|
-| PRECHECK | ANALYZE_REQUIREMENT, FAILED |
+| PRECHECK | ANALYZE_REQUIREMENT, `resumePhase`, FAILED |
 | ANALYZE_REQUIREMENT | GENERATE_TESTS, AWAITING_APPROVAL, PAUSED, FAILED |
 | GENERATE_TESTS | CONFIRM_RED, AWAITING_APPROVAL, PAUSED, FAILED |
 | CONFIRM_RED | FREEZE_TESTS, GENERATE_TESTS, PAUSED, FAILED |
@@ -233,6 +244,8 @@ type ValidationIssueCategory =
 | PAUSED | PRECHECK |
 
 进入 `AWAITING_APPROVAL` 或 `PAUSED` 时必须保存非终态 `resumePhase`。恢复 `PAUSED` 必须先进入 `PRECHECK` 复验仓库，再由预检成功逻辑返回所保存的 `resumePhase`；这是 PRECHECK 的一个恢复分支，不允许调用者跳过预检。审批批准后只能进入 `pendingApproval.resumePhase`；拒绝后进入 `PAUSED`。正常新任务的 PRECHECK 只能进入 ANALYZE_REQUIREMENT。
+
+权威 API 为 `canTransition(state: TaskState, to: TaskPhase): boolean` 和 `transition(state: TaskState, to: TaskPhase, now: string): TaskState`。二者必须使用同一判定函数；`canTransition` 不抛错，`transition` 在 false 时抛 `INVALID_TRANSITION`。动态规则：`AWAITING_APPROVAL` 只有存在 pendingApproval 且 `to === pendingApproval.resumePhase` 时可批准恢复；`PAUSED` 只能到 PRECHECK；`PRECHECK` 在 `resumePhase === null` 时只能正常进入 ANALYZE_REQUIREMENT，在非空且预检已由调用方成功完成时只能进入该 resumePhase 或 FAILED。每次成功转移更新 `updatedAt`；离开 AWAITING_APPROVAL 后清空 pendingApproval；消费 PRECHECK 恢复分支后清空 resumePhase；进入终态同时清空 resumePhase。
 
 ### 7.1 TaskState
 
@@ -266,6 +279,14 @@ interface ProtectedTestRef {
   frozenAt: string;            // ISO-8601
 }
 
+interface ValidationSnapshot {
+  results: ValidationResult[]; // exactly one latest result per enabled validator
+  baselineVerified: boolean;
+  workspacePolicyVerified: boolean;
+  codeVersion: string;         // SHA-256 of the normalized working-tree diff
+  completedAt: string;         // ISO-8601, after every included validator ended
+}
+
 interface PendingApproval {
   action: Action;
   decisionReason: string;
@@ -292,19 +313,42 @@ interface TaskState {
   lastError: SerializedSentinelError | null;
   lastCodeChangeAt: string | null;
   finalValidationAt: string | null;
+  finalValidation: ValidationSnapshot | null;
   createdAt: string;
   updatedAt: string;
 }
 ```
 
-所有字段必填；可缺省概念使用显式 `null` 或空数组。`phase === "SUCCEEDED"` 时必须满足：`finalValidationAt !== null`、`lastCodeChangeAt === null || finalValidationAt >= lastCodeChangeAt`、`pendingApproval === null`、所有启用验证器最后结果通过且受保护测试哈希一致。其他阶段不得依靠 schema 单独推断业务成功。
+所有字段必填；可缺省概念使用显式 `null` 或空数组。`TaskStateSchema` 的 `phase === "SUCCEEDED"` 精化必须满足：`finalValidationAt !== null`、`finalValidation !== null`、两者时间相等、`lastCodeChangeAt === null || finalValidationAt >= lastCodeChangeAt`、`pendingApproval === null`、`finalValidation.baselineVerified === true`、`workspacePolicyVerified === true`，以及 `validationPlan` 中每个启用 validator 在 `finalValidation.results` 恰有一个 `passed` 结果。实际文件哈希和工作区 diff 的计算由 Task 8 在创建 ValidationSnapshot 前完成；TaskState schema 验证快照的完整性与一致性，而不是重新访问文件系统。
 
 ### 7.2 Event
 
-- 单调递增序号、时间戳、task ID；
-- 事件类型和状态前后值；
-- 脱敏 payload；
-- 因果动作/观察 ID。
+```ts
+type JsonValue = null | boolean | number | string | JsonValue[] | { [key: string]: JsonValue };
+type EventType =
+  | "TASK_CREATED" | "PHASE_CHANGED" | "ACTION_REQUESTED" | "POLICY_DECIDED"
+  | "ACTION_COMPLETED" | "VALIDATION_COMPLETED" | "FEEDBACK_CREATED"
+  | "BASELINE_FROZEN" | "APPROVAL_REQUESTED" | "APPROVAL_RESOLVED"
+  | "TASK_PAUSED" | "TASK_RESUMED" | "TASK_SUCCEEDED" | "TASK_FAILED"
+  | "USER_INTERRUPTED";
+
+interface TaskEvent {
+  schemaVersion: 1;
+  id: string;
+  taskId: string;
+  sequence: number;             // positive integer, starts at 1 per task
+  type: EventType;
+  timestamp: string;            // ISO-8601
+  phaseBefore: TaskPhase | null;
+  phaseAfter: TaskPhase | null;
+  actionId: string | null;
+  observationActionId: string | null;
+  causationEventId: string | null;
+  payload: { [key: string]: JsonValue }; // already redacted before append
+}
+```
+
+EventStore assigns `sequence`; callers cannot select it. `TASK_CREATED` has `phaseBefore: null`, `phaseAfter: "PRECHECK"`; `PHASE_CHANGED` requires both phases; action events require `actionId`; `ACTION_COMPLETED` may set `observationActionId` to the same action ID; other non-applicable references are explicit `null`. On load, every JSONL row must pass `TaskEventSchema`, task IDs must match, sequences must be contiguous from 1, IDs unique, and timestamps nondecreasing; otherwise throw `STATE_CORRUPT`.
 
 ### 7.3 Action / Observation
 
@@ -391,6 +435,29 @@ interface Feedback {
   createdAt: string;
 }
 ```
+
+### 7.6 错误对象
+
+```ts
+interface SerializedSentinelError {
+  code: SentinelErrorCode;
+  message: string; // user-facing, already redacted
+  retryable: boolean;
+  recoverable: boolean;
+  detail: { [key: string]: JsonValue } | null; // already redacted
+}
+
+class SentinelError extends Error {
+  readonly code: SentinelErrorCode;
+  readonly retryable: boolean;
+  readonly recoverable: boolean;
+  readonly detail: { [key: string]: JsonValue } | null;
+  toJSON(redact: (value: JsonValue) => JsonValue): SerializedSentinelError;
+  static fromJSON(value: SerializedSentinelError): SentinelError;
+}
+```
+
+`SentinelError` 的 `name` 固定为 `"SentinelError"`，原始 `cause` 可以保留在进程内但不得序列化。所有字段必填；无 detail 使用 `null`。`toJSON` 必须先对 message/detail 脱敏。相同 code 的 retryable/recoverable 默认映射由 `error.ts` 常量定义，但构造函数允许适配器在有依据时覆盖。
 
 ## 8. 领域与机制设计
 
