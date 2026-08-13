@@ -7,6 +7,12 @@ import { isAbsolute, join, relative, resolve } from "node:path";
 import { SentinelError } from "../domain/error.js";
 import { TaskStateSchema, type TaskState } from "../domain/task.js";
 
+/**
+ * Durable task state for the v1 single-Agent/single-writer execution model.
+ * Ancestry is rechecked beside each path-based mutation and no-follow opens are
+ * used when available. Pure Node path APIs cannot eliminate a malicious parent
+ * directory swap between checks; that OS/filesystem TOCTOU remains declared risk.
+ */
 export class TaskStore {
   constructor(private readonly repositoryRoot: string) {}
 
@@ -82,11 +88,14 @@ export class TaskStore {
 
     try {
       await mkdir(directory, { recursive: true });
-      handle = await open(temporaryPath, "w");
+      await this.assertSafeStoragePath(state.id, "PERSISTENCE_FAILED", false);
+      handle = await open(temporaryPath, writeNoFollowFlags());
       await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
       await handle.sync();
       await handle.close();
       handle = undefined;
+      await this.assertSafeStoragePath(state.id, "PERSISTENCE_FAILED", false);
+      await assertNotSymbolicLink(temporaryPath, state.id, "PERSISTENCE_FAILED");
       await rename(temporaryPath, destinationPath);
       await syncDirectoryBestEffort(directory);
     } catch (error) {
@@ -116,9 +125,29 @@ function parseForWrite(state: TaskState): TaskState {
   try {
     const validated = TaskStateSchema.parse(state);
     assertSafeTaskId(validated.id, "PERSISTENCE_FAILED");
+    assertRecoverableState(validated);
     return validated;
   } catch (error) {
     throw persistenceError("Refusing to persist invalid task state.", state.id, error);
+  }
+}
+
+function writeNoFollowFlags(): number {
+  return constants.O_WRONLY | constants.O_CREAT | constants.O_TRUNC | constants.O_NOFOLLOW;
+}
+
+async function assertNotSymbolicLink(
+  path: string,
+  taskId: string,
+  code: "PERSISTENCE_FAILED" | "STATE_CORRUPT"
+): Promise<void> {
+  try {
+    if ((await lstat(path)).isSymbolicLink()) {
+      throw new SentinelError({ code, message: "Task storage file cannot be a symbolic link.", detail: { taskId } });
+    }
+  } catch (error) {
+    if (error instanceof SentinelError) throw error;
+    throw new SentinelError({ code, message: "Task storage file boundary cannot be verified.", detail: { taskId }, cause: error });
   }
 }
 

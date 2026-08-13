@@ -141,6 +141,81 @@ describe("durable task state", () => {
     }
   });
 
+  it("refuses to create or save unrecoverable pause and approval states", async () => {
+    const root = await makeRoot();
+    const tasks = new TaskStore(root);
+    const paused = { ...makeState(), phase: "PAUSED", resumePhase: null } as TaskState;
+
+    await expect(tasks.create(paused)).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+
+    await tasks.create(makeState());
+    const invalidApproval = {
+      ...makeState(),
+      phase: "AWAITING_APPROVAL",
+      resumePhase: "VALIDATE",
+      pendingApproval: {
+        action: { version: 1, id: "a1", rationale: "Needs approval", type: "create_file", path: "src/new.ts", content: "" },
+        decisionReason: "Creates a file",
+        requestedAt: TIMESTAMPS[1],
+        resumePhase: "IMPLEMENT",
+        baselineVersion: 0
+      }
+    } as TaskState;
+    await expect(tasks.save(invalidApproval)).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+  });
+
+  it("revalidates the final state and event paths immediately before writing", async () => {
+    const root = await makeRoot();
+    const outside = await makeRoot();
+    const store = new TaskStore(root);
+    await store.create(makeState());
+    const taskDirectory = join(root, ".sentinelloop", "tasks", "t1");
+    await rm(taskDirectory, { recursive: true });
+    try {
+      await symlink(outside, taskDirectory, process.platform === "win32" ? "junction" : "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(code ?? "")) return;
+      throw error;
+    }
+
+    await expect(store.save({ ...makeState(), updatedAt: TIMESTAMPS[2] })).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+
+    await rm(taskDirectory, { recursive: true });
+    await mkdir(taskDirectory, { recursive: true });
+    await writeFile(join(taskDirectory, "state.json"), JSON.stringify(makeState()), "utf8");
+    const events = new EventStore(root);
+    await events.list("t1");
+    await rm(taskDirectory, { recursive: true });
+    await symlink(outside, taskDirectory, process.platform === "win32" ? "junction" : "dir");
+    await expect(events.append("t1", event())).rejects.toMatchObject<Partial<SentinelError>>({ code: "STATE_CORRUPT" });
+  });
+
+  it("refuses file links already present at mutating open boundaries", async () => {
+    const root = await makeRoot();
+    const outside = await makeRoot();
+    const tasks = new TaskStore(root);
+    await tasks.create(makeState());
+    const taskDirectory = join(root, ".sentinelloop", "tasks", "t1");
+    const outsideState = join(outside, "outside-state.json");
+    const outsideEvents = join(outside, "outside-events.jsonl");
+    await writeFile(outsideState, "untouched-state", "utf8");
+    await writeFile(outsideEvents, "", "utf8");
+    try {
+      await symlink(outsideState, join(taskDirectory, "state.json.tmp"), "file");
+      await symlink(outsideEvents, join(taskDirectory, "events.jsonl"), "file");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (["EPERM", "EACCES", "ENOTSUP"].includes(code ?? "")) return;
+      throw error;
+    }
+
+    await expect(tasks.save({ ...makeState(), updatedAt: TIMESTAMPS[2] })).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+    await expect(new EventStore(root).append("t1", event())).rejects.toMatchObject<Partial<SentinelError>>({ code: "PERSISTENCE_FAILED" });
+    await expect(readFile(outsideState, "utf8")).resolves.toBe("untouched-state");
+    await expect(readFile(outsideEvents, "utf8")).resolves.toBe("");
+  });
+
   it("rejects storage paths redirected outside the repository by symlinks", async () => {
     const root = await makeRoot();
     const outside = await makeRoot();

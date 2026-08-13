@@ -31,7 +31,11 @@ function isAllowed(state: TaskState, to: TaskPhase): boolean {
   }
 
   if (!STATIC_TRANSITIONS[state.phase].includes(to)) return false;
-  if (to === "AWAITING_APPROVAL" && state.pendingApproval === null) return false;
+  if (to === "AWAITING_APPROVAL" && (
+    state.pendingApproval === null
+    || state.pendingApproval.resumePhase !== state.phase
+    || state.pendingApproval.baselineVersion !== state.baselineVersion
+  )) return false;
 
   if (to === "SUCCEEDED") {
     return TaskStateSchema.safeParse({

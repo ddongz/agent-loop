@@ -9,6 +9,11 @@ import { TaskEventSchema, type TaskEvent } from "../domain/task.js";
 
 export type NewTaskEvent = Omit<TaskEvent, "sequence">;
 
+/**
+ * Append-only events under the v1 single-Agent/single-writer prerequisite.
+ * The final ancestry check and no-follow open reduce link attacks but cannot
+ * make path traversal atomic against a malicious concurrent parent swap.
+ */
 export class EventStore {
   constructor(private readonly repositoryRoot: string) {}
 
@@ -24,7 +29,8 @@ export class EventStore {
     let handle: Awaited<ReturnType<typeof open>> | undefined;
     try {
       await mkdir(directory, { recursive: true });
-      handle = await open(this.eventsPath(taskId), "a");
+      await this.assertSafeStoragePath(taskId);
+      handle = await open(this.eventsPath(taskId), appendNoFollowFlags());
       await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
       await handle.sync();
       await handle.close();
@@ -132,6 +138,10 @@ export class EventStore {
       }
     }
   }
+}
+
+function appendNoFollowFlags(): number {
+  return constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW;
 }
 
 function parseEvent(value: unknown, taskId: string): TaskEvent {

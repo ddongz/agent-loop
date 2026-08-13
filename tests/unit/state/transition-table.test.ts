@@ -164,6 +164,29 @@ describe("transition table", () => {
     expect(awaiting.resumePhase).toBe("IMPLEMENT");
   });
 
+  it("rejects approval context for a different phase or baseline", () => {
+    const mismatches = [
+      { resumePhase: "VALIDATE" as const, baselineVersion: 0 },
+      { resumePhase: "IMPLEMENT" as const, baselineVersion: 1 }
+    ];
+
+    for (const approval of mismatches) {
+      const state = makeState("IMPLEMENT", {
+        pendingApproval: {
+          action: { version: 1, id: "a1", rationale: "Needs approval", type: "create_file", path: "src/new.ts", content: "" },
+          decisionReason: "Creates a file",
+          requestedAt: UPDATED_AT,
+          ...approval
+        }
+      });
+
+      expect(canTransition(state, "AWAITING_APPROVAL")).toBe(false);
+      expect(() => transition(state, "AWAITING_APPROVAL", NEXT_AT)).toThrowError(
+        expect.objectContaining<Partial<SentinelError>>({ code: "INVALID_TRANSITION" })
+      );
+    }
+  });
+
   it("rejects success until the final evidence satisfies the task schema", () => {
     const incomplete = makeState("VALIDATE");
     const completedAt = "2026-08-14T00:03:00.000Z";
