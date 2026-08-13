@@ -51,3 +51,10 @@
 - Result: original six blockers were resolved; deeper contract gaps remained for serialized errors, durable events, state-dependent recovery transitions and success evidence.
 - Revision: defined error-code and serialization contracts, complete TaskEvent schema/recovery invariants, stateful transition APIs, and ValidationSnapshot-backed success refinements.
 - Lesson: resolving surface type names is insufficient; persistence and state-machine APIs must carry enough evidence to enforce their declared invariants.
+
+## 2026-08-14 — Cold-start final verdict
+
+- Task: SPEC-04
+- Agent verdict: PASS at specification commit `28dc209`.
+- Evidence: the unfamiliar agent confirmed all 10 blockers now have directly testable authoritative definitions and still made no implementation changes.
+- Decision: specification gate is open; formal implementation may start under worktree + subagent + TDD + two-stage review.

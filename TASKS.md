@@ -11,9 +11,9 @@
 - [x] 编写 `PROJECT_ROADMAP.md`
 - [x] 编写 `SPEC.md`
 - [x] 编写 `SPEC_PROCESS.md` 初稿
-- [ ] 使用 `writing-plans` 编写 `PLAN.md`
-- [ ] 使用不同类型陌生智能体冷启动 1–2 个 task
-- [ ] 根据冷启动证据修订 SPEC/PLAN，并记录关键 diff
+- [x] 使用 `writing-plans` 编写 `PLAN.md`
+- [x] 使用不同类型陌生智能体冷启动 1–2 个 task
+- [x] 根据冷启动证据修订 SPEC/PLAN，并记录关键 diff
 
 ## B. 工程环境与过程证据
 
