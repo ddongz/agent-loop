@@ -10,7 +10,7 @@ SentinelLoop 是一个面向 TypeScript/Node.js 仓库的本地优先 Coding Age
 
 ### 首版包含
 
-- TypeScript/Node.js 22+ 项目；
+- TypeScript/Node.js >=22.12.0 项目；
 - npm、pnpm、yarn 自动识别；
 - 自然语言功能需求；
 - Agent 驱动 TDD；

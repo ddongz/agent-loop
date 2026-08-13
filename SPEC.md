@@ -24,7 +24,7 @@ SentinelLoop 将“测试先行、测试保护、验证反馈、进展判断和�
 
 ### 2.1 首版范围
 
-- TypeScript/Node.js 22+ Git 仓库；
+- TypeScript/Node.js >=22.12.0 Git 仓库；
 - npm、pnpm、yarn，按 lockfile 自动识别；
 - CLI 自然语言需求输入；
 - Agent 先生成测试，再实现功能；
@@ -274,13 +274,13 @@ Config Service ────── User config + repository discovery
 
 ## 10. 技术选型与理由
 
-- TypeScript + Node.js 22：与目标仓库生态一致，跨平台且适合 npm 分发；
+- TypeScript + Node.js >=22.12.0：与目标仓库生态一致，满足 Commander 15 的运行要求，跨平台且适合 npm 分发；
 - ESM：现代 Node 包标准；
 - Commander：稳定 CLI 参数/子命令；
 - Zod：动作、配置和持久化数据的运行时 schema；
 - Vitest：快速单测、mock 和跨平台支持；
 - OpenAI 官方 JavaScript SDK或等价薄 HTTP 适配：只使用单次 Chat Completions/tool calling，不使用 agent runner；
-- 跨平台 keyring 库：访问系统凭据管理器，不明文降级；
+- 可注入 CredentialStore + 平台适配器：Windows 使用 PowerShell PasswordVault，macOS 使用 `security`，Linux 使用 `secret-tool`；生产不明文降级，测试使用内存实现；
 - JSON/JSONL：便于审计、恢复和不依赖数据库；
 - npm package + GitHub Release：跨平台获取，满足助教允许的 Release 链接交付。
 
@@ -290,7 +290,7 @@ Config Service ────── User config + repository discovery
 
 - npm 构件名固定为 `sentinelloop-cli`，可执行命令固定为 `sentinelloop`；若后续公开 npm registry 发生名称占用，仅 registry 发布坐标可改为用户拥有的 scope，CLI 名称和 Release 构件名保持不变；
 - `npm install -g <package>` 或 `npx <package> run ...`；
-- 支持 Windows、macOS、Linux，Node.js 22+；
+- 支持 Windows、macOS、Linux，Node.js >=22.12.0；
 - GitHub Actions 运行三平台测试、构建 npm tarball，并在 tag 时创建 Release；
 - `.gitlab-ci.yml` 提供名为 `unit-test` 的 job；
 - README 说明获取、安装、运行、系统凭据配置、平台依赖和限制；
