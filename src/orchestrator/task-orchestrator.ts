@@ -106,6 +106,7 @@ export interface TaskOrchestratorDependencies {
 }
 
 const MAX_ACTIONS_PER_PHASE = 24;
+const MAX_TEST_MUTATIONS_BEFORE_NUDGE = 6;
 
 const actionBaseProperties = {
   version: { type: "integer", const: 1 },
@@ -328,8 +329,11 @@ export class TaskOrchestrator {
     const events = await this.#deps.eventStore.list(initial.id);
     const stalled = await this.#stallGuard(initial, events);
     if (stalled !== null) return stalled;
+    const nudge = countTestMutations(events) >= MAX_TEST_MUTATIONS_BEFORE_NUDGE
+      ? " Stop editing tests now and call run_validation immediately to verify the red baseline."
+      : "";
     const completion = await this.#deps.llm.complete(buildContext(initial, events, initial.lastFeedback, {
-      systemGovernance: "Use one governed tool action per turn. Write failing tests for the requirement with create_file or apply_patch, then call run_validation so the harness can verify the red baseline.",
+      systemGovernance: `Use one governed tool action per turn. Write failing tests for the requirement with create_file or apply_patch, then call run_validation so the harness can verify the red baseline.${nudge}`,
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
       sensitiveValues: this.#deps.sensitiveValues,
@@ -676,6 +680,15 @@ function asJson(value: unknown): JsonValue {
 function addCost(current: number | null, added: number | null): number | null {
   if (current === null && added === null) return null;
   return (current ?? 0) + (added ?? 0);
+}
+
+function countTestMutations(events: readonly TaskEvent[]): number {
+  return events.filter((event) => {
+    if (event.type !== "ACTION_REQUESTED") return false;
+    const action = event.payload.action;
+    return typeof action === "object" && action !== null && "type" in action
+      && (action.type === "create_file" || action.type === "apply_patch");
+  }).length;
 }
 
 function validationHistory(events: readonly TaskEvent[]): FeedbackHistoryEntry[] {
