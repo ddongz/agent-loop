@@ -79,6 +79,52 @@ describe("TaskOrchestrator deterministic pause and resume", () => {
     });
   });
 
+  it("pauses with a stall reason when a phase consumes its action allowance without validation", async () => {
+    const root = await createTempRepository();
+    await mkdir(join(root, "src"));
+    await mkdir(join(root, "tests"));
+    await writeFile(join(root, "src", "feature.ts"), "export const value = 0;\n", "utf8");
+    const clock = new SequenceClock();
+    const workspace = new FakeWorkspaceInspector();
+    const taskStore = new TaskStore(root);
+    const eventStore = new EventStore(root);
+    const scripts: ScriptedStep[] = Array.from({ length: 30 }, (_, index) => ({
+      when: { call: index + 1, phase: "GENERATE_TESTS" },
+      action: {
+        version: 1 as const,
+        id: `read-${index + 1}`,
+        type: "read_file" as const,
+        rationale: "Inspect the source.",
+        path: "src/feature.ts",
+        maxBytes: 4096,
+      },
+    }));
+    const policy = new PolicyEngine();
+    const orchestrator = new TaskOrchestrator({
+      taskStore,
+      eventStore,
+      precheck: async () => repositoryProfile(root),
+      baseline: new MemoryBaselineService(),
+      policy,
+      registry: new ToolRegistry(policy, createFileTools({ workspaceRoot: root })),
+      feedback: new FeedbackEngine({ now: clock.now, enabledValidators: ["test"] }),
+      llm: new ScriptedLLMClient(scripts),
+      confirmation: { confirmRed: async () => false },
+      workspace,
+      now: clock.now,
+    });
+    await orchestrator.start({ id: "stall-guard", repositoryRoot: root, requirement: "Implement feature." });
+
+    let state = await orchestrator.step("stall-guard");
+    for (let index = 0; index < 30 && state.phase !== "PAUSED"; index += 1) state = await orchestrator.step(state.id);
+
+    expect(state).toMatchObject({ phase: "PAUSED", resumePhase: "GENERATE_TESTS", iteration: 0 });
+    const events = await eventStore.list(state.id);
+    const pauseEvent = events.findLast(({ type }) => type === "TASK_PAUSED");
+    expect(pauseEvent).toMatchObject({ payload: { reason: "STALL_DETECTED" } });
+    expect(events.filter(({ type }) => type === "ACTION_COMPLETED")).toHaveLength(24);
+  });
+
   it("persists an interrupted active phase for deterministic recovery", async () => {
     const fixture = await scenario([]);
     let state = await fixture.orchestrator.step(fixture.taskId);

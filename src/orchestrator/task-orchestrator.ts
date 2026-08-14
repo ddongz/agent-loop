@@ -105,6 +105,8 @@ export interface TaskOrchestratorDependencies {
   eventId?: () => string;
 }
 
+const MAX_ACTIONS_PER_PHASE = 24;
+
 const actionBaseProperties = {
   version: { type: "integer", const: 1 },
   id: { type: "string", minLength: 1, maxLength: 64 },
@@ -324,8 +326,10 @@ export class TaskOrchestrator {
 
   async #generateTests(initial: TaskState): Promise<TaskState> {
     const events = await this.#deps.eventStore.list(initial.id);
+    const stalled = await this.#stallGuard(initial, events);
+    if (stalled !== null) return stalled;
     const completion = await this.#deps.llm.complete(buildContext(initial, events, initial.lastFeedback, {
-      systemGovernance: "Use one governed tool action and obey the active TDD phase.",
+      systemGovernance: "Use one governed tool action per turn. Write failing tests for the requirement with create_file or apply_patch, then call run_validation so the harness can verify the red baseline.",
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
       sensitiveValues: this.#deps.sensitiveValues,
@@ -388,8 +392,10 @@ export class TaskOrchestrator {
 
   async #implement(initial: TaskState): Promise<TaskState> {
     const events = await this.#deps.eventStore.list(initial.id);
+    const stalled = await this.#stallGuard(initial, events);
+    if (stalled !== null) return stalled;
     const completion = await this.#deps.llm.complete(buildContext(initial, events, initial.lastFeedback, {
-      systemGovernance: "Use one governed tool action and finish only to request deterministic validation.",
+      systemGovernance: "Use one governed tool action per turn. Change production code with apply_patch or create_file to make the frozen failing tests pass, then call finish to request deterministic validation.",
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
       sensitiveValues: this.#deps.sensitiveValues,
@@ -523,6 +529,17 @@ export class TaskOrchestrator {
     const moved = await this.#move(pending, "AWAITING_APPROVAL", causationEventId);
     await this.#event(moved, "APPROVAL_REQUESTED", state.phase, "AWAITING_APPROVAL", action.id, null, causationEventId, { action: asJson(action) });
     return moved;
+  }
+
+  // A model that never triggers validation can otherwise loop indefinitely in
+  // a single phase; the CLI drives bounded steps, so pause with an explicit
+  // reason once the current phase has consumed its action allowance.
+  async #stallGuard(state: TaskState, events: readonly TaskEvent[]): Promise<TaskState | null> {
+    const lastPhaseChange = events.findLast((event) => event.type === "PHASE_CHANGED" && event.phaseAfter === state.phase);
+    const since = lastPhaseChange?.sequence ?? 0;
+    const completed = events.filter((event) => event.type === "ACTION_COMPLETED" && event.sequence > since).length;
+    if (completed < MAX_ACTIONS_PER_PHASE) return null;
+    return this.#pause(state, "STALL_DETECTED", events.at(-1)?.id ?? null);
   }
 
   async #pause(state: TaskState, reason: string, causationEventId: string | null): Promise<TaskState> {
