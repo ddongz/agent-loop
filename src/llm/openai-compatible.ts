@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import { ActionSchema } from "../domain/action.js";
+import { ActionSchema, type Action } from "../domain/action.js";
 import { SentinelError } from "../domain/error.js";
 import {
   CompletionRequestSchema,
@@ -103,33 +103,48 @@ export class OpenAICompatibleClient implements LLMClient {
     }, this.#timeoutMs);
 
     try {
-      const transport = this.#fetch(this.#endpoint, {
-        method: "POST",
-        headers: {
-          authorization: `Bearer ${this.#apiKey}`,
-          "content-type": "application/json",
-          ...this.#extraHeaders
-        },
-        body: JSON.stringify(toChatCompletionBody(parsedRequest.data, this.#model)),
-        signal: controller.signal
-      });
-      const response = await Promise.race([transport, cancellation]);
-      if (!response.ok) throw mapHttpError(response.status);
-      const text = await Promise.race([readBoundedResponse(response, controller.signal), cancellation]);
-      let body: unknown;
-      try {
-        body = JSON.parse(text);
-      } catch (cause) {
-        throw protocolError("LLM response is not valid JSON.", cause);
+      // Responses without any valid tool call (zero calls, or calls whose
+      // arguments fail validation) are usually transient sampling failures —
+      // re-sampling the identical request often yields a valid action, so
+      // retry a bounded number of times before surfacing the error.
+      const maxAttempts = 3;
+      for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+        try {
+          const transport = this.#fetch(this.#endpoint, {
+            method: "POST",
+            headers: {
+              authorization: `Bearer ${this.#apiKey}`,
+              "content-type": "application/json",
+              ...this.#extraHeaders
+            },
+            body: JSON.stringify(toChatCompletionBody(parsedRequest.data, this.#model)),
+            signal: controller.signal
+          });
+          const response = await Promise.race([transport, cancellation]);
+          if (!response.ok) throw mapHttpError(response.status);
+          const text = await Promise.race([readBoundedResponse(response, controller.signal), cancellation]);
+          let body: unknown;
+          try {
+            body = JSON.parse(text);
+          } catch (cause) {
+            throw protocolError("LLM response is not valid JSON.", cause);
+          }
+          return parseCompletion(body, parsedRequest.data);
+        } catch (cause) {
+          const retryableToolCallCount = cause instanceof SentinelError
+            && cause.code === "LLM_PROTOCOL"
+            && cause.detail !== null
+            && typeof cause.detail.toolCallCount === "number";
+          if (retryableToolCallCount && !callerAborted && !timedOut && attempt < maxAttempts) continue;
+          if (cause instanceof SentinelError) throw cause;
+          if (callerAborted || signal?.aborted) throw callerAbortError(cause);
+          if (timedOut || isAbortError(cause)) {
+            throw new SentinelError({ code: "LLM_TIMEOUT", message: "LLM request timed out.", cause });
+          }
+          throw new SentinelError({ code: "LLM_UNAVAILABLE", message: "Unable to reach the configured LLM endpoint.", cause });
+        }
       }
-      return parseCompletion(body, parsedRequest.data);
-    } catch (cause) {
-      if (cause instanceof SentinelError) throw cause;
-      if (callerAborted || signal?.aborted) throw callerAbortError(cause);
-      if (timedOut || isAbortError(cause)) {
-        throw new SentinelError({ code: "LLM_TIMEOUT", message: "LLM request timed out.", cause });
-      }
-      throw new SentinelError({ code: "LLM_UNAVAILABLE", message: "Unable to reach the configured LLM endpoint.", cause });
+      throw new SentinelError({ code: "LLM_PROTOCOL", message: "LLM completion retry loop was exhausted without a result." });
     } finally {
       clearTimeout(timer);
       signal?.removeEventListener("abort", onCallerAbort);
@@ -200,23 +215,41 @@ function parseCompletion(raw: unknown, request: CompletionRequest): CompletionRe
   const choice = response.data.choices[0]!;
   if (choice.finish_reason !== "tool_calls") throw protocolError("LLM response used an unsupported finish reason.");
   const calls = choice.message.tool_calls ?? [];
-  if (calls.length !== 1) throw protocolError("LLM response must contain exactly one tool call.");
+  if (calls.length === 0) throw protocolError("LLM response must contain exactly one tool call.", undefined, { toolCallCount: 0 });
   if (choice.message.content !== undefined && choice.message.content !== null && choice.message.content.trim() !== "") {
     throw protocolError("LLM response cannot mix assistant text with a tool call.");
   }
 
-  const call = calls[0]!;
+  // Some endpoints (e.g. DeepSeek) return several tool calls despite
+  // parallel_tool_calls=false. The harness executes exactly one governed
+  // action per step, so deterministically pick the first call that carries a
+  // valid matching action; the remaining intent resurfaces on the next turn
+  // once the model observes this step's result.
   const toolNames = new Set(request.tools.map(({ name }) => name));
-  if (!toolNames.has(call.function.name)) throw protocolError("LLM response requested an unknown tool.");
-  let argumentsValue: unknown;
-  try {
-    argumentsValue = JSON.parse(call.function.arguments);
-  } catch (cause) {
-    throw protocolError("LLM tool arguments are not valid JSON.", cause);
+  let action: Action | null = null;
+  let invalidCalls = 0;
+  for (const candidate of calls) {
+    if (!toolNames.has(candidate.function.name)) {
+      invalidCalls += 1;
+      continue;
+    }
+    let argumentsValue: unknown;
+    try {
+      argumentsValue = JSON.parse(candidate.function.arguments);
+    } catch {
+      invalidCalls += 1;
+      continue;
+    }
+    const parsed = ActionSchema.safeParse(argumentsValue);
+    if (!parsed.success || parsed.data.type !== candidate.function.name) {
+      invalidCalls += 1;
+      continue;
+    }
+    action = parsed.data;
+    break;
   }
-  const action = ActionSchema.safeParse(argumentsValue);
-  if (!action.success || action.data.type !== call.function.name) {
-    throw protocolError("LLM tool arguments do not contain one valid matching action.", action.success ? undefined : action.error);
+  if (action === null) {
+    throw protocolError("LLM tool arguments do not contain one valid matching action.", undefined, { toolCallCount: calls.length, invalidCalls });
   }
 
   const usage = response.data.usage === undefined ? null : {
@@ -227,7 +260,7 @@ function parseCompletion(raw: unknown, request: CompletionRequest): CompletionRe
   };
   const result = CompletionResultSchema.safeParse({
     outcome: "action",
-    action: action.data,
+    action,
     providerRequestId: response.data.id ?? null,
     usage
   });

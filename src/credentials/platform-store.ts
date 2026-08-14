@@ -63,19 +63,32 @@ interface SecureRecord {
   updatedAt: string;
 }
 
-const windowsScript = [
-  "param([string]$Operation,[string]$Profile,[string]$Resource)",
-  "$vault = New-Object Windows.Security.Credentials.PasswordVault",
-  "if ($Operation -eq 'set') {",
-  "  $value = [Console]::In.ReadToEnd().TrimEnd([char]13,[char]10)",
-  "  try { $old = $vault.Retrieve($Resource,$Profile); $vault.Remove($old) } catch {}",
-  "  $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential($Resource,$Profile,$value)))",
-  "} elseif ($Operation -eq 'get') {",
-  "  try { $item = $vault.Retrieve($Resource,$Profile); $item.RetrievePassword(); [Console]::Out.Write($item.Password) } catch { exit 1 }",
-  "} elseif ($Operation -eq 'delete') {",
-  "  try { $item = $vault.Retrieve($Resource,$Profile); $vault.Remove($item) } catch { exit 1 }",
-  "}",
-].join("; ");
+// Values are embedded as literals instead of trailing -Command arguments:
+// trailing arguments are NOT bound to a param() block and would be parsed as
+// extra commands. Profile names are validated as safe ([A-Za-z0-9._-]+) and
+// operation is a fixed literal, so embedding them cannot inject code.
+// WinRT types must be loaded explicitly for New-Object to resolve them, and
+// ErrorActionPreference Stop guarantees failures exit non-zero instead of
+// silently reporting success.
+function windowsScript(operation: "set" | "get" | "delete", profile: string, resource: string): string {
+  return [
+    `$Operation = '${operation}'; $Profile = '${profile}'; $Resource = '${resource}'`,
+    "$ErrorActionPreference = 'Stop'",
+    "[Windows.Security.Credentials.PasswordVault, Windows.Security.Credentials, ContentType = WindowsRuntime] | Out-Null",
+    "[Windows.Security.Credentials.PasswordCredential, Windows.Security.Credentials, ContentType = WindowsRuntime] | Out-Null",
+    "$vault = New-Object Windows.Security.Credentials.PasswordVault",
+    "if ($Operation -eq 'set') {",
+    "  $value = [Console]::In.ReadToEnd().TrimEnd([char]13,[char]10)",
+    "  if ($value.Length -eq 0) { exit 1 }",
+    "  try { $old = $vault.Retrieve($Resource,$Profile); $vault.Remove($old) } catch {}",
+    "  $vault.Add((New-Object Windows.Security.Credentials.PasswordCredential($Resource,$Profile,$value)))",
+    "} elseif ($Operation -eq 'get') {",
+    "  $item = $vault.Retrieve($Resource,$Profile); $item.RetrievePassword(); [Console]::Out.Write($item.Password)",
+    "} elseif ($Operation -eq 'delete') {",
+    "  $item = $vault.Retrieve($Resource,$Profile); $vault.Remove($item)",
+    "}",
+  ].join("; ");
+}
 
 export class PlatformCredentialStore implements CredentialStore {
   readonly #platform: SupportedPlatform;
@@ -164,7 +177,7 @@ export class PlatformCredentialStore implements CredentialStore {
 
 function commandFor(platform: SupportedPlatform, operation: "set" | "get" | "delete", profile: string, service: string, stdin: string): ProcessRequest {
   if (platform === "win32") {
-    return { executable: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", windowsScript, operation, profile, service], stdin, shell: false };
+    return { executable: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", windowsScript(operation, profile, service)], stdin, shell: false };
   }
   if (platform === "darwin") {
     const verb = operation === "get" ? ["find-generic-password", "-a", profile, "-s", service, "-w"]

@@ -185,13 +185,64 @@ describe("OpenAICompatibleClient", () => {
     ["multiple choices", { choices: completion().choices.concat(completion().choices) }],
     ["unsupported finish reason", { choices: [{ ...completion().choices[0], finish_reason: "length" }] }],
     ["text pretending to be a tool", { choices: [{ ...completion().choices[0], finish_reason: "stop", message: { role: "assistant", content: JSON.stringify(action), tool_calls: [] } }] }],
-    ["multiple tool calls", { choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [completion().choices[0]!.message.tool_calls[0], completion().choices[0]!.message.tool_calls[0]] } }] }],
+    ["multiple tool calls with invalid arguments", { choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [{ ...completion().choices[0]!.message.tool_calls[0], id: "call-a", function: { name: "create_file", arguments: "{" } }, { ...completion().choices[0]!.message.tool_calls[0], id: "call-b", function: { name: "create_file", arguments: "{" } }] } }] }],
     ["unknown tool", { choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [{ ...completion().choices[0]!.message.tool_calls[0], function: { name: "shell", arguments: JSON.stringify(action) } }] } }] }],
     ["invalid JSON", { choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [{ ...completion().choices[0]!.message.tool_calls[0], function: { name: "create_file", arguments: "{" } }] } }] }],
     ["non-strict action", { choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [{ ...completion().choices[0]!.message.tool_calls[0], function: { name: "create_file", arguments: JSON.stringify({ ...action, extra: true }) } }] } }] }]
   ])("rejects %s as a protocol error", async (_name, overrides) => {
     const fetch: FetchTransport = async () => response(completion(overrides));
     await expect(client(fetch).complete(request())).rejects.toMatchObject({ code: "LLM_PROTOCOL" });
+  });
+
+  it("deterministically picks the first valid tool call when several are returned", async () => {
+    const second = { ...completion().choices[0]!.message.tool_calls[0], id: "call-2", function: { name: "create_file", arguments: JSON.stringify({ ...action, id: "create-2" }) } };
+    const multi = completion({
+      choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [completion().choices[0]!.message.tool_calls[0], second] } }]
+    });
+    const fetch = vi.fn<FetchTransport>(async () => response(multi));
+
+    const result = await client(fetch).complete(request());
+
+    expect(result.outcome).toBe("action");
+    expect(result.action).toEqual(action);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it("skips calls with invalid arguments and picks the first valid one", async () => {
+    const broken = { ...completion().choices[0]!.message.tool_calls[0], id: "call-0", function: { name: "create_file", arguments: "{not json" } };
+    const multi = completion({
+      choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [broken, completion().choices[0]!.message.tool_calls[0]] } }]
+    });
+    const fetch = vi.fn<FetchTransport>(async () => response(multi));
+
+    const result = await client(fetch).complete(request());
+
+    expect(result.action).toEqual(action);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
+  it.each([
+    ["no tool calls", (body: ReturnType<typeof completion>) => ({ ...body, choices: [{ ...body.choices[0], message: { ...body.choices[0]!.message, tool_calls: [] } }] })],
+    ["malformed tool arguments", (body: ReturnType<typeof completion>) => ({ ...body, choices: [{ ...body.choices[0], message: { ...body.choices[0]!.message, tool_calls: [{ ...body.choices[0]!.message.tool_calls[0], function: { name: "create_file", arguments: JSON.stringify({ ...action, version: 2 }) } }] } }] })]
+  ])("retries a transient %s response until a valid action arrives", async (_name, violate) => {
+    const fetch = vi.fn<FetchTransport>(async () => response(violate(completion())));
+    fetch.mockImplementationOnce(async () => response(violate(completion())))
+      .mockImplementationOnce(async () => response(completion()));
+
+    const result = await client(fetch).complete(request());
+
+    expect(result.outcome).toBe("action");
+    expect(fetch).toHaveBeenCalledTimes(2);
+  });
+
+  it("surfaces the protocol error with the tool call count after bounded retries", async () => {
+    const alwaysEmpty = completion({
+      choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [] } }]
+    });
+    const fetch = vi.fn<FetchTransport>(async () => response(alwaysEmpty));
+
+    await expect(client(fetch).complete(request())).rejects.toMatchObject({ code: "LLM_PROTOCOL", detail: { toolCallCount: 0 } });
+    expect(fetch).toHaveBeenCalledTimes(3);
   });
 
   it("maps transport failures and rejects oversized responses", async () => {

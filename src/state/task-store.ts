@@ -89,6 +89,9 @@ export class TaskStore {
     try {
       await mkdir(directory, { recursive: true });
       await this.assertSafeStoragePath(state.id, "PERSISTENCE_FAILED", false);
+      // O_NOFOLLOW is ignored on Windows, so link-check before opening too;
+      // otherwise the open would truncate the link target before the refusal.
+      await assertNotSymbolicLink(temporaryPath, state.id, "PERSISTENCE_FAILED", true);
       handle = await open(temporaryPath, writeNoFollowFlags());
       await handle.writeFile(`${JSON.stringify(state, null, 2)}\n`, "utf8");
       await handle.sync();
@@ -139,13 +142,15 @@ function writeNoFollowFlags(): number {
 async function assertNotSymbolicLink(
   path: string,
   taskId: string,
-  code: "PERSISTENCE_FAILED" | "STATE_CORRUPT"
+  code: "PERSISTENCE_FAILED" | "STATE_CORRUPT",
+  allowMissing = false
 ): Promise<void> {
   try {
     if ((await lstat(path)).isSymbolicLink()) {
       throw new SentinelError({ code, message: "Task storage file cannot be a symbolic link.", detail: { taskId } });
     }
   } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT" && allowMissing) return;
     if (error instanceof SentinelError) throw error;
     throw new SentinelError({ code, message: "Task storage file boundary cannot be verified.", detail: { taskId }, cause: error });
   }
