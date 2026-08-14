@@ -149,7 +149,7 @@ git add src/state tests/unit/state tests/integration/state
 git commit -m "feat(state): add explicit transitions and recovery"
 ```
 
-### Task 3: Repository precheck and validation discovery
+### Task 3: Repository precheck and validation discovery — COMPLETE (`5bf87fe`, `4f3a0aa`)
 
 **Files:**
 - Create: `src/repository/workspace.ts`, `src/repository/package-manager.ts`, `src/repository/validation-discovery.ts`
@@ -160,32 +160,32 @@ git commit -m "feat(state): add explicit transitions and recovery"
 - Produces: `precheckRepository(root): Promise<RepositoryProfile>`; `discoverPackageManager(files): PackageManager`; `discoverValidationPlan(packageJson, overrides): ValidationPlan`.
 - Consumes: domain errors from Task 1.
 
-- [ ] **Step 1: Write failing dirty-worktree and lockfile tests**
+- [x] **Step 1: Write failing dirty-worktree and lockfile tests**
 
 ```ts
 await expect(precheckRepository(dirtyRepo)).rejects.toMatchObject({ code: "DIRTY_WORKTREE" });
 expect(() => discoverPackageManager(["package-lock.json", "pnpm-lock.yaml"])).toThrowError(/conflicting/i);
 ```
 
-- [ ] **Step 2: Run the tests and capture red**
+- [x] **Step 2: Run the tests and capture red**
 
 Run: `npm test -- tests/integration/repository/precheck.test.ts tests/unit/repository/discovery.test.ts`  
 Expected: FAIL because repository services do not exist.
 
-- [ ] **Step 3: Implement realpath, Git and Node prechecks**
+- [x] **Step 3: Implement realpath, Git and Node prechecks**
 
 Use `git status --porcelain`, verify `.git`, parse `process.versions.node`, require >=22.12.0, and ensure `package.json` exists. Do not create `.sentinelloop` until all checks pass.
 
-- [ ] **Step 4: Implement lockfile and script discovery**
+- [x] **Step 4: Implement lockfile and script discovery**
 
 Map package manager commands without invoking the LLM. Discover scripts named `test`, `typecheck`, `lint`, `build`; require `test`; apply schema-validated user overrides.
 
-- [ ] **Step 5: Run repository tests and full static checks**
+- [x] **Step 5: Run repository tests and full static checks**
 
 Run: `npm test -- tests/integration/repository tests/unit/repository && npm run typecheck && npm run lint`  
 Expected: PASS.
 
-- [ ] **Step 6: Commit**
+- [x] **Step 6: Commit**
 
 ```bash
 git add src/repository tests/helpers tests/integration/repository tests/unit/repository

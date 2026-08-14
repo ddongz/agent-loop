@@ -88,3 +88,14 @@
 - Commits: `8833092`, `7d92506`, `37705c1`.
 - Human intervention: none.
 - Lesson: a security threat table must distinguish guaranteed controls from residual OS-level races; tests and documentation should not imply stronger atomicity than the runtime can provide.
+
+## 2026-08-14 — Task 3 repository precheck and discovery
+
+- Task: IMPL-03, clean-Git precheck, Node boundary, package-manager detection and deterministic validation discovery.
+- TDD evidence: missing-module RED; initial GREEN attempt exposed three fixture/path/order defects. Review fixes added four focused RED cases for dirty precedence, prerelease SemVer and Windows executable paths.
+- Green evidence: 25/25 focused tests and 59/59 full tests passed; typecheck, lint, build and diff-check passed.
+- Review: initial review found 3 Important issues; all were fixed in `4f3a0aa`. Final re-review returned 0 Critical/Important, Spec Compliance PASS and Task Quality PASS.
+- Minor: clean Git repository with missing package.json has correct implementation behavior but no longer has a direct focused regression test.
+- Commits: `5bf87fe`, `4f3a0aa`.
+- Human intervention: none.
+- Lesson: environment prechecks require an explicit error-precedence policy, and structured process arguments make whitespace heuristics both unnecessary and harmful to Windows portability.
