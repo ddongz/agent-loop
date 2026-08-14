@@ -19,6 +19,7 @@ export interface RepositoryProfile {
 export interface RepositoryPrecheckOptions {
   nodeVersion?: string;
   validationOverrides?: ValidationOverrides;
+  allowDirty?: boolean;
 }
 
 export async function precheckRepository(
@@ -39,7 +40,7 @@ export async function precheckRepository(
   }
 
   const status = await runGit(resolvedRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
-  if (status.length > 0) {
+  if (!options.allowDirty && status.length > 0) {
     throw new SentinelError({ code: "DIRTY_WORKTREE", message: "Repository worktree must be clean before starting a task." });
   }
 

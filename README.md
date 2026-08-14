@@ -45,6 +45,31 @@ sentinelloop auth status --profile default
 sentinelloop auth clear --profile default
 ```
 
+The live runtime uses the `default` profile. Create the non-secret config at
+`%APPDATA%\SentinelLoop\config.json` on Windows or
+`$XDG_CONFIG_HOME/sentinelloop/config.json` (normally
+`~/.config/sentinelloop/config.json`) on macOS/Linux:
+
+```json
+{
+  "schemaVersion": 1,
+  "profiles": {
+    "default": {
+      "baseUrl": "https://api.example.com/v1",
+      "model": "your-tool-capable-model",
+      "allowedHeaderNames": [],
+      "policies": {
+        "maxIterations": 8,
+        "maxDurationMs": 1800000
+      }
+    }
+  }
+}
+```
+
+`SENTINELLOOP_CONFIG` may point to another non-secret config file. API keys
+belong only in the operating-system credential manager through `auth set`.
+
 `status` reports only configuration metadata, never the key. Windows uses
 PasswordVault through non-interactive PowerShell. Linux requires an installed
 and unlocked `secret-tool`/libsecret service. macOS lookup and deletion use the
@@ -74,10 +99,11 @@ continues durable state and can resolve one exact pending action. `status`
 prints phase and iteration budget. `report` renders a redacted Markdown audit
 from state and events.
 
-The packaged default executable currently exposes the complete command surface
-but deliberately fails closed for `run` and `resume` until a host application
-injects a profile-aware orchestrator/provider composition. The core loop is
-available through the exported library and is exercised end-to-end offline.
+The packaged executable composes the repository precheck, durable stores,
+baseline and approval services, governed file/validation tools, feedback
+engine, and OpenAI-compatible client. The accepted red-test evidence is shown
+for interactive confirmation before it is frozen. Run later `resume`, `status`,
+and `report` commands from the target repository root.
 
 ## Offline demo and development
 
@@ -121,8 +147,8 @@ tests/                        unit, integration, fixture and demo coverage
 
 - Version 0.1 targets one clean TypeScript repository and one agent; it has no
   WebUI, general shell, multi-repository planner, or automatic npm publishing.
-- The packaged CLI needs host composition before live `run`/`resume`; the
-  deterministic core, reports, status, auth, tests, and demo remain usable.
+- Version 0.1 uses the `default` provider/credential profile and requires an
+  interactive terminal when a newly generated red-test baseline is confirmed.
 - A red test must be a real target-test failure, not syntax, dependency,
   discovery, or infrastructure failure. Validation defaults to test,
   typecheck, lint, then build and short-circuits at the first failure.

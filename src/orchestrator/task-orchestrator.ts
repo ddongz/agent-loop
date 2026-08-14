@@ -100,13 +100,68 @@ export interface TaskOrchestratorDependencies {
   confirmation: ConfirmationIO;
   workspace: WorkspaceInspector;
   approvals?: ApprovalService & DispatchContext["approvals"];
+  sensitiveValues?: readonly string[];
   now?: () => string;
   eventId?: () => string;
 }
 
-const completionTools: readonly CompletionTool[] = [
-  "read_file", "list_files", "search_files", "create_file", "apply_patch", "run_validation", "finish", "request_clarification",
-].map((name) => ({ name, description: `Request the governed ${name} operation.`, inputSchema: { type: "object" } }));
+const actionBaseProperties = {
+  version: { type: "integer", const: 1 },
+  id: { type: "string", minLength: 1, maxLength: 64 },
+  rationale: { type: "string", minLength: 1, maxLength: 2_000 },
+} as const;
+const actionToolSchemas: Readonly<Record<Action["type"], Record<string, JsonValue>>> = {
+  read_file: actionSchema("read_file", {
+    path: { type: "string", minLength: 1, maxLength: 4_096 },
+    maxBytes: { type: "integer", minimum: 1, maximum: 1_048_576, default: 65_536 },
+  }, ["path"]),
+  list_files: actionSchema("list_files", {
+    path: { type: "string", minLength: 1, maxLength: 4_096 },
+    maxDepth: { type: "integer", minimum: 0, maximum: 20, default: 5 },
+    maxEntries: { type: "integer", minimum: 1, maximum: 1_000, default: 200 },
+  }),
+  search_files: actionSchema("search_files", {
+    query: { type: "string", minLength: 1, maxLength: 1_000 },
+    path: { type: "string", minLength: 1, maxLength: 4_096 },
+    glob: { type: "string", minLength: 1, maxLength: 500 },
+    maxResults: { type: "integer", minimum: 1, maximum: 1_000, default: 200 },
+  }, ["query"]),
+  create_file: actionSchema("create_file", {
+    path: { type: "string", minLength: 1, maxLength: 4_096 },
+    content: { type: "string", maxLength: 1_048_576 },
+  }, ["path", "content"]),
+  apply_patch: actionSchema("apply_patch", {
+    path: { type: "string", minLength: 1, maxLength: 4_096 },
+    patch: { type: "string", maxLength: 1_048_576 },
+  }, ["path", "patch"]),
+  run_validation: actionSchema("run_validation", {
+    validator: { enum: ["test", "typecheck", "lint", "build", "all"] },
+  }, ["validator"]),
+  finish: actionSchema("finish", {
+    summary: { type: "string", minLength: 1, maxLength: 2_000 },
+  }, ["summary"]),
+  request_clarification: actionSchema("request_clarification", {
+    question: { type: "string", minLength: 1, maxLength: 2_000 },
+  }, ["question"]),
+};
+const completionTools: readonly CompletionTool[] = (Object.keys(actionToolSchemas) as Action["type"][]).map((name) => ({
+  name,
+  description: `Request the governed ${name} operation.`,
+  inputSchema: actionToolSchemas[name],
+}));
+
+function actionSchema(
+  type: Action["type"],
+  properties: Record<string, JsonValue>,
+  required: readonly string[] = [],
+): Record<string, JsonValue> {
+  return {
+    type: "object",
+    additionalProperties: false,
+    properties: { ...actionBaseProperties, type: { const: type }, ...properties },
+    required: ["version", "id", "rationale", "type", ...required],
+  };
+}
 
 export class TaskOrchestrator {
   readonly #deps: TaskOrchestratorDependencies;
@@ -273,6 +328,7 @@ export class TaskOrchestrator {
       systemGovernance: "Use one governed tool action and obey the active TDD phase.",
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
+      sensitiveValues: this.#deps.sensitiveValues,
     }));
     let state = await this.#recordUsage(initial, completion.usage);
     if (completion.outcome === "no_action") return this.#move(state, "PAUSED");
@@ -336,6 +392,7 @@ export class TaskOrchestrator {
       systemGovernance: "Use one governed tool action and finish only to request deterministic validation.",
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
+      sensitiveValues: this.#deps.sensitiveValues,
     }));
     let state = await this.#recordUsage(initial, completion.usage);
     if (completion.outcome === "no_action") return this.#pause(state, "NO_ACTION", null);

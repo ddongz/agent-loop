@@ -1,5 +1,5 @@
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, relative, resolve } from "node:path";
 
@@ -73,6 +73,53 @@ describe("npm distribution", () => {
     });
     expect(help.status, help.stderr).toBe(0);
     expect(help.stdout).toContain("Usage: sentinelloop");
+
+    const repository = join(installDirectory, "target-repository");
+    await mkdir(repository);
+    await writeFile(join(repository, ".gitignore"), ".sentinelloop/\n", "utf8");
+    await writeFile(join(repository, "package.json"), `${JSON.stringify({
+      name: "packaged-runtime-smoke",
+      version: "1.0.0",
+      private: true,
+      scripts: { test: "node --test" },
+    }, null, 2)}\n`, "utf8");
+    await writeFile(join(repository, "package-lock.json"), `${JSON.stringify({
+      name: "packaged-runtime-smoke",
+      version: "1.0.0",
+      lockfileVersion: 3,
+      requires: true,
+      packages: { "": { name: "packaged-runtime-smoke", version: "1.0.0" } },
+    }, null, 2)}\n`, "utf8");
+    expect(run("git", ["init"], repository).status).toBe(0);
+    expect(run("git", ["config", "user.email", "smoke@example.invalid"], repository).status).toBe(0);
+    expect(run("git", ["config", "user.name", "SentinelLoop Smoke"], repository).status).toBe(0);
+    expect(run("git", ["add", "."], repository).status).toBe(0);
+    expect(run("git", ["commit", "-m", "fixture"], repository).status).toBe(0);
+
+    const runtimeEnvironment = {
+      ...process.env,
+      SENTINELLOOP_CONFIG: join(installDirectory, "missing-config.json"),
+    };
+    const installedEntry = join(installDirectory, "node_modules", "sentinelloop-cli", "dist", "index.js");
+    const runResult = spawnSync(process.execPath, [installedEntry, "run", "Add input validation"], {
+      cwd: repository,
+      encoding: "utf8",
+      env: runtimeEnvironment,
+      shell: false,
+    });
+    expect(runResult.status, runResult.stderr).toBe(64);
+    expect(runResult.stderr).toContain("Default profile is not configured");
+    expect(runResult.stderr).not.toContain("runtime is not configured");
+
+    const resumeResult = spawnSync(process.execPath, [installedEntry, "resume", "missing-task"], {
+      cwd: repository,
+      encoding: "utf8",
+      env: runtimeEnvironment,
+      shell: false,
+    });
+    expect(resumeResult.status, resumeResult.stderr).toBe(64);
+    expect(resumeResult.stderr).toContain("Task missing-task was not found");
+    expect(resumeResult.stderr).not.toContain("runtime is not configured");
   }, 60_000);
 });
 
@@ -84,6 +131,10 @@ function runNpm(args: readonly string[], cwd: string) {
     encoding: "utf8",
     shell: false,
   });
+}
+
+function run(executable: string, args: readonly string[], cwd: string) {
+  return spawnSync(executable, [...args], { cwd, encoding: "utf8", shell: false });
 }
 
 async function listFiles(root: string, directory = root): Promise<string[]> {

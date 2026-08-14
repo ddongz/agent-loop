@@ -1,6 +1,7 @@
 /// <reference types="node" />
 
 import type { ReadStream, WriteStream } from "node:tty";
+import { createInterface } from "node:readline/promises";
 
 import { SentinelError } from "../domain/error.js";
 import type { CliIO } from "./program.js";
@@ -18,6 +19,19 @@ export class NodeCliIO implements CliIO {
 
   writeError(text: string): void {
     this.errorOutput.write(text.endsWith("\n") ? text : `${text}\n`);
+  }
+
+  async confirm(prompt: string): Promise<boolean> {
+    if (!this.input.isTTY) {
+      throw new SentinelError({ code: "INVALID_INPUT", message: "Red-test confirmation requires an interactive TTY." });
+    }
+    const interface_ = createInterface({ input: this.input, output: this.errorOutput, terminal: true });
+    try {
+      const answer = await interface_.question(`${prompt} [y/N] `);
+      return /^(?:y|yes)$/i.test(answer.trim());
+    } finally {
+      interface_.close();
+    }
   }
 
   async readSecret(prompt: string): Promise<string> {

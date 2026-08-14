@@ -1,4 +1,6 @@
 import { spawn } from "node:child_process";
+import { existsSync } from "node:fs";
+import { dirname, join } from "node:path";
 
 import { ActionSchema, type Action, type Observation } from "../domain/action.js";
 import { SentinelError } from "../domain/error.js";
@@ -58,7 +60,8 @@ export async function runValidationCommand(
   const result = await new Promise<{ exitCode: number | null; closeSignal: NodeJS.Signals | null }>((resolve, reject) => {
     let terminationReason: "timeout" | "abort" | null = null;
     let settled = false;
-    const child = spawnProcess(platformExecutable(command.executable), [...command.args], {
+    const invocation = platformInvocation(command);
+    const child = spawnProcess(invocation.executable, invocation.args, {
       cwd: workspaceRoot,
       shell: false,
       windowsHide: true,
@@ -115,6 +118,23 @@ export async function runValidationCommand(
     stdoutTruncated: stdout.truncated,
     stderrTruncated: stderr.truncated,
   };
+}
+
+function platformInvocation(command: ValidationCommand): { executable: string; args: string[] } {
+  if (process.platform === "win32" && /^(?:npm|npm\.cmd)$/i.test(command.executable)) {
+    const npmCli = [
+      process.env.npm_execpath,
+      join(dirname(process.execPath), "node_modules", "npm", "bin", "npm-cli.js"),
+    ].find((candidate): candidate is string => candidate !== undefined && existsSync(candidate));
+    if (npmCli === undefined) {
+      throw new SentinelError({
+        code: "VALIDATION_INFRASTRUCTURE",
+        message: "npm-cli.js could not be resolved for shell-free validation on Windows.",
+      });
+    }
+    return { executable: process.execPath, args: [npmCli, ...command.args] };
+  }
+  return { executable: platformExecutable(command.executable), args: [...command.args] };
 }
 
 function selectCommands(plan: ValidationPlan, validator: Extract<Action, { type: "run_validation" }>["validator"]): ValidationCommand[] {
