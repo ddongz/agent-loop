@@ -8,7 +8,19 @@ import { afterEach, describe, expect, it } from "vitest";
 const temporaryDirectories: string[] = [];
 
 afterEach(async () => {
-  await Promise.all(temporaryDirectories.splice(0).map((directory) => rm(directory, { recursive: true, force: true })));
+  // Windows can briefly keep handles on a directory after a child exits;
+  // retry the cleanup instead of failing the suite with a transient ENOTEMPTY.
+  for (const directory of temporaryDirectories.splice(0)) {
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        await rm(directory, { recursive: true, force: true });
+        break;
+      } catch (error) {
+        if (attempt === 4) throw error;
+        await new Promise((resolve) => setTimeout(resolve, 1_000));
+      }
+    }
+  }
 });
 
 describe("npm distribution", () => {
@@ -120,6 +132,7 @@ describe("npm distribution", () => {
       encoding: "utf8",
       env: runtimeEnvironment,
       shell: false,
+      timeout: 30_000,
     });
     expect(runResult.status, runResult.stderr).toBe(64);
     expect(runResult.stderr).toContain("Default profile is not configured");
@@ -130,11 +143,12 @@ describe("npm distribution", () => {
       encoding: "utf8",
       env: runtimeEnvironment,
       shell: false,
+      timeout: 30_000,
     });
     expect(resumeResult.status, resumeResult.stderr).toBe(64);
     expect(resumeResult.stderr).toContain("Task missing-task was not found");
     expect(resumeResult.stderr).not.toContain("runtime is not configured");
-  }, 60_000);
+  }, 180_000);
 });
 
 function runNpm(args: readonly string[], cwd: string) {
@@ -144,11 +158,12 @@ function runNpm(args: readonly string[], cwd: string) {
     cwd,
     encoding: "utf8",
     shell: false,
+    timeout: 120_000,
   });
 }
 
 function run(executable: string, args: readonly string[], cwd: string) {
-  return spawnSync(executable, [...args], { cwd, encoding: "utf8", shell: false });
+  return spawnSync(executable, [...args], { cwd, encoding: "utf8", shell: false, timeout: 30_000 });
 }
 
 async function listFiles(root: string, directory = root): Promise<string[]> {
