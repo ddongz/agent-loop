@@ -1,4 +1,4 @@
-import { access, rm, unlink, writeFile } from "node:fs/promises";
+import { access, mkdir, rm, unlink, writeFile } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
@@ -38,20 +38,29 @@ describe("precheckRepository", () => {
     await expect(access(join(root, ".sentinelloop"))).rejects.toThrow();
   });
 
-  it("rejects a directory that is not a Git repository", async () => {
+  it("rejects a fake .git path that is not a Git repository", async () => {
     const root = await createTempRepository();
     roots.push(root);
     await rm(join(root, ".git"), { recursive: true, force: true });
+    await mkdir(join(root, ".git"));
 
     await expect(precheckRepository(root)).rejects.toMatchObject({ code: "NOT_GIT_REPOSITORY" });
   });
 
-  it("rejects a repository without package.json", async () => {
+  it("reports a deleted tracked package.json as a dirty worktree first", async () => {
     const root = await createTempRepository();
     roots.push(root);
     await unlink(join(root, "package.json"));
 
-    await expect(precheckRepository(root)).rejects.toMatchObject({ code: "PACKAGE_JSON_MISSING" });
+    await expect(precheckRepository(root)).rejects.toMatchObject({ code: "DIRTY_WORKTREE" });
+  });
+
+  it("reports a dirty worktree before an unsupported Node version", async () => {
+    const root = await createTempRepository();
+    roots.push(root);
+    await writeFile(join(root, "untracked.ts"), "export {};\n", "utf8");
+
+    await expect(precheckRepository(root, { nodeVersion: "21.99.0" })).rejects.toMatchObject({ code: "DIRTY_WORKTREE" });
   });
 
   it("checks the injected Node version at the supported boundary", async () => {
@@ -60,6 +69,9 @@ describe("precheckRepository", () => {
 
     await expect(precheckRepository(root, { nodeVersion: "22.12.0" })).resolves.toMatchObject({ root });
     await expect(precheckRepository(root, { nodeVersion: "22.11.9" })).rejects.toMatchObject({
+      code: "UNSUPPORTED_NODE_VERSION",
+    });
+    await expect(precheckRepository(root, { nodeVersion: "22.12.0-rc.1" })).rejects.toMatchObject({
       code: "UNSUPPORTED_NODE_VERSION",
     });
   });

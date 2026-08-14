@@ -65,10 +65,23 @@ describe("discoverValidationPlan", () => {
     ]);
   });
 
+  it("accepts an executable path containing spaces as one structured spawn token", () => {
+    expect(
+      discoverValidationPlan(
+        { scripts },
+        { test: { executable: "C:\\Program Files\\nodejs\\node.exe", args: ["runner.mjs"] } },
+        "npm",
+      )[0],
+    ).toMatchObject({
+      executable: "C:\\Program Files\\nodejs\\node.exe",
+      args: ["runner.mjs"],
+    });
+  });
+
   it.each([
-    { test: { executable: "npm test", args: [] } },
     { test: { executable: "npm", args: "test" } },
     { test: { executable: "npm", args: [], timeoutMs: 999 } },
+    { test: { executable: "   ", args: [] } },
     { unknown: { executable: "npm", args: ["test"] } },
   ])("rejects an invalid override: %j", (override) => {
     expect(() => discoverValidationPlan({ scripts }, override, "npm")).toThrowError();

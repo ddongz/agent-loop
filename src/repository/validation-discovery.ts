@@ -22,7 +22,7 @@ const PackageJsonSchema = z.object({
 }).passthrough();
 
 const CommandOverrideSchema = z.object({
-  executable: z.string().min(1).refine((value) => !/\s/.test(value), "executable must not contain whitespace"),
+  executable: z.string().refine((value) => value.trim().length > 0, "executable cannot be empty"),
   args: z.array(z.string()),
   timeoutMs: z.number().int().min(1_000).optional(),
   enabled: z.boolean().optional(),

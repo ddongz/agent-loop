@@ -27,8 +27,6 @@ export async function precheckRepository(
 ): Promise<RepositoryProfile> {
   const resolvedRoot = await resolveRoot(root);
   await requirePath(join(resolvedRoot, ".git"), "NOT_GIT_REPOSITORY", "Repository root must contain .git.");
-  await requirePath(join(resolvedRoot, "package.json"), "PACKAGE_JSON_MISSING", "Repository root must contain package.json.");
-  requireSupportedNode(options.nodeVersion ?? process.versions.node);
 
   const repositoryTopLevel = await runGit(resolvedRoot, ["rev-parse", "--show-toplevel"]);
   if (normalizeForComparison(await realpath(repositoryTopLevel.trim())) !== normalizeForComparison(resolvedRoot)) {
@@ -44,6 +42,9 @@ export async function precheckRepository(
   if (status.length > 0) {
     throw new SentinelError({ code: "DIRTY_WORKTREE", message: "Repository worktree must be clean before starting a task." });
   }
+
+  await requirePath(join(resolvedRoot, "package.json"), "PACKAGE_JSON_MISSING", "Repository root must contain package.json.");
+  requireSupportedNode(options.nodeVersion ?? process.versions.node);
 
   const files = await readdir(resolvedRoot);
   const packageManager = discoverPackageManager(files);
@@ -73,7 +74,7 @@ async function requirePath(path: string, code: "NOT_GIT_REPOSITORY" | "PACKAGE_J
 }
 
 function requireSupportedNode(version: string): void {
-  const match = /^v?(\d+)\.(\d+)\.(\d+)(?:$|-)/.exec(version);
+  const match = /^v?(\d+)\.(\d+)\.(\d+)$/.exec(version);
   if (match === null) {
     throw new SentinelError({ code: "UNSUPPORTED_NODE_VERSION", message: `Cannot parse Node.js version: ${version}.` });
   }
