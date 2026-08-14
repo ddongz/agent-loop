@@ -240,6 +240,12 @@ function parseCompletion(raw: unknown, request: CompletionRequest): CompletionRe
       invalidCalls += 1;
       continue;
     }
+    // Some models occasionally omit the discriminator field even though the
+    // tool schema requires it. The harness contract binds action.type to the
+    // requested tool name, so default a missing type deterministically.
+    if (typeof argumentsValue === "object" && argumentsValue !== null && !Array.isArray(argumentsValue) && !("type" in argumentsValue)) {
+      argumentsValue = { ...argumentsValue, type: candidate.function.name };
+    }
     const parsed = ActionSchema.safeParse(argumentsValue);
     if (!parsed.success || parsed.data.type !== candidate.function.name) {
       invalidCalls += 1;

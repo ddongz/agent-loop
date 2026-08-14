@@ -208,6 +208,21 @@ describe("OpenAICompatibleClient", () => {
     expect(fetch).toHaveBeenCalledTimes(1);
   });
 
+  it("defaults a missing discriminator type to the requested tool name", async () => {
+    const missingType = { ...action } as Record<string, unknown>;
+    delete missingType.type;
+    const body = completion({
+      choices: [{ ...completion().choices[0], message: { ...completion().choices[0]!.message, tool_calls: [{ ...completion().choices[0]!.message.tool_calls[0], function: { name: "create_file", arguments: JSON.stringify(missingType) } }] } }]
+    });
+    const fetch = vi.fn<FetchTransport>(async () => response(body));
+
+    const result = await client(fetch).complete(request());
+
+    expect(result.outcome).toBe("action");
+    expect(result.action).toEqual(action);
+    expect(fetch).toHaveBeenCalledTimes(1);
+  });
+
   it("skips calls with invalid arguments and picks the first valid one", async () => {
     const broken = { ...completion().choices[0]!.message.tool_calls[0], id: "call-0", function: { name: "create_file", arguments: "{not json" } };
     const multi = completion({
