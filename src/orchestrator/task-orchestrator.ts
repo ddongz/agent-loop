@@ -329,7 +329,7 @@ export class TaskOrchestrator {
     const events = await this.#deps.eventStore.list(initial.id);
     const stalled = await this.#stallGuard(initial, events);
     if (stalled !== null) return stalled;
-    const nudge = countTestMutations(events) >= MAX_TEST_MUTATIONS_BEFORE_NUDGE
+    const nudge = countMutations(events) >= MAX_TEST_MUTATIONS_BEFORE_NUDGE
       ? " Stop editing tests now and call run_validation immediately to verify the red baseline."
       : "";
     const completion = await this.#deps.llm.complete(buildContext(initial, events, initial.lastFeedback, {
@@ -398,8 +398,11 @@ export class TaskOrchestrator {
     const events = await this.#deps.eventStore.list(initial.id);
     const stalled = await this.#stallGuard(initial, events);
     if (stalled !== null) return stalled;
+    const nudge = countMutations(events, "IMPLEMENT") >= MAX_TEST_MUTATIONS_BEFORE_NUDGE
+      ? " Stop editing code now and call finish to request deterministic validation."
+      : "";
     const completion = await this.#deps.llm.complete(buildContext(initial, events, initial.lastFeedback, {
-      systemGovernance: "Use one governed tool action per turn. Change production code with apply_patch or create_file to make the frozen failing tests pass, then call finish to request deterministic validation.",
+      systemGovernance: `Use one governed tool action per turn. Change production code with apply_patch or create_file to make the frozen failing tests pass, then call finish to request deterministic validation.${nudge}`,
       repositorySummary: "TypeScript package repository.",
       tools: completionTools,
       sensitiveValues: this.#deps.sensitiveValues,
@@ -682,9 +685,10 @@ function addCost(current: number | null, added: number | null): number | null {
   return (current ?? 0) + (added ?? 0);
 }
 
-function countTestMutations(events: readonly TaskEvent[]): number {
+function countMutations(events: readonly TaskEvent[], phase?: TaskPhase): number {
   return events.filter((event) => {
     if (event.type !== "ACTION_REQUESTED") return false;
+    if (phase !== undefined && event.phaseBefore !== phase) return false;
     const action = event.payload.action;
     return typeof action === "object" && action !== null && "type" in action
       && (action.type === "create_file" || action.type === "apply_patch");

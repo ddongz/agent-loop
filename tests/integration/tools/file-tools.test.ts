@@ -35,6 +35,52 @@ describe("file tools", () => {
     expect(await readFile(target)).toEqual(original);
   });
 
+  it("applies a bare-hunk patch by synthesizing file headers and coordinates", async () => {
+    const root = await createTempRepository();
+    await mkdir(join(root, "src"), { recursive: true });
+    const target = join(root, "src", "feature.ts");
+    await writeFile(target, "export const value = 1;\n", "utf8");
+    const patchTool = requiredTool(root, "apply_patch");
+
+    const observation = await patchTool.execute(
+      {
+        version: 1,
+        id: "bare-hunk",
+        rationale: "Replace the file.",
+        type: "apply_patch",
+        path: "src/feature.ts",
+        patch: "@@\n-export const value = 1;\n+export const value = 2;\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "succeeded", error: null });
+    expect(await readFile(target, "utf8")).toBe("export const value = 2;\n");
+  });
+
+  it("applies a Claude-style Begin Patch block as a whole-file replacement", async () => {
+    const root = await createTempRepository();
+    await mkdir(join(root, "src"), { recursive: true });
+    const target = join(root, "src", "feature.ts");
+    await writeFile(target, "export const value = 1;\n", "utf8");
+    const patchTool = requiredTool(root, "apply_patch");
+
+    const observation = await patchTool.execute(
+      {
+        version: 1,
+        id: "claude-block",
+        rationale: "Rewrite the file.",
+        type: "apply_patch",
+        path: "src/feature.ts",
+        patch: "*** Begin Patch\n*** Update File: src/feature.ts\nexport const value = 2;\n*** End Patch\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "succeeded", error: null });
+    expect(await readFile(target, "utf8")).toBe("export const value = 2;\n");
+  });
+
   it("truncates UTF-8 reads only at a complete character boundary", async () => {
     const root = await createTempRepository();
     const target = join(root, "说明.txt");

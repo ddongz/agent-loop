@@ -33,6 +33,21 @@ describe("domain contracts", () => {
     expect(ActionSchema.safeParse({ version: 1, id: "a1", rationale: "Patch.", type: "apply_patch", path: "src/a.ts", patch: "--- a/src/b.ts\n+++ b/src/b.ts\n@@ -1 +1 @@\n-a\n+b" }).success).toBe(false);
   });
 
+  it("accepts bare-hunk patches and Claude-style whole-file blocks", () => {
+    const bare = { version: 1, id: "a1", rationale: "Patch.", type: "apply_patch", path: "src/a.ts", patch: "@@\n-old\n+new" };
+    expect(ActionSchema.safeParse(bare).success).toBe(true);
+    const claude = {
+      version: 1, id: "a2", rationale: "Rewrite.", type: "apply_patch", path: "src/a.ts",
+      patch: "*** Begin Patch\n*** Update File: src/a.ts\nnew\n*** End Patch",
+    };
+    expect(ActionSchema.safeParse(claude).success).toBe(true);
+    const mismatchedBlock = {
+      version: 1, id: "a3", rationale: "Rewrite.", type: "apply_patch", path: "src/a.ts",
+      patch: "*** Begin Patch\n*** Update File: src/other.ts\nnew\n*** End Patch",
+    };
+    expect(ActionSchema.safeParse(mismatchedBlock).success).toBe(false);
+  });
+
   it("accepts a fully valid succeeded task", () => {
     expect(TaskStateSchema.safeParse(successfulTask()).success).toBe(true);
   });

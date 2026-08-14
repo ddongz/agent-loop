@@ -174,6 +174,65 @@ describe("TaskOrchestrator deterministic pause and resume", () => {
     expect(governance[6]).toContain("Stop editing tests");
   });
 
+  it("nudges the implement phase toward finish after repeated code mutations", async () => {
+    const root = await createTempRepository();
+    await mkdir(join(root, "src"));
+    await mkdir(join(root, "tests"));
+    await writeFile(join(root, "src", "feature.ts"), "export const value = 0;\n", "utf8");
+    const clock = new SequenceClock();
+    const workspace = new FakeWorkspaceInspector();
+    const taskStore = new TaskStore(root);
+    const eventStore = new EventStore(root);
+    const governance: string[] = [];
+    const patch = {
+      version: 1 as const,
+      id: "patch-1",
+      type: "apply_patch" as const,
+      rationale: "Adjust the source.",
+      path: "src/feature.ts",
+      patch: "--- a/src/feature.ts\n+++ b/src/feature.ts\n@@ -1 +1 @@\n-export const value = 0;\n+export const value = 1;\n",
+    };
+    const llm: LLMClient = {
+      async complete(request) {
+        governance.push(request.context.systemGovernance);
+        const call = governance.length;
+        if (call === 1) {
+          return {
+            outcome: "action",
+            action: { version: 1, id: "test", type: "create_file", rationale: "Add target test.", path: "tests/feature.test.ts", content: "expect(value).toBe(2);\n" },
+            providerRequestId: null, usage: null,
+          };
+        }
+        if (call === 2) {
+          return { outcome: "action", action: { version: 1, id: "red", type: "run_validation", rationale: "Confirm red.", validator: "test" }, providerRequestId: null, usage: null };
+        }
+        return { outcome: "action", action: { ...patch, id: `patch-${call}` }, providerRequestId: null, usage: null };
+      },
+    };
+    const policy = new PolicyEngine();
+    const orchestrator = new TaskOrchestrator({
+      taskStore,
+      eventStore,
+      precheck: async () => repositoryProfile(root),
+      baseline: new MemoryBaselineService(),
+      policy,
+      registry: new ToolRegistry(policy, [...createFileTools({ workspaceRoot: root }), validationTool([[validationResult("failed", "red")]])]),
+      feedback: new FeedbackEngine({ now: clock.now, enabledValidators: ["test"] }),
+      llm,
+      confirmation: { confirmRed: async () => true },
+      workspace,
+      now: clock.now,
+    });
+    await orchestrator.start({ id: "implement-nudge", repositoryRoot: root, requirement: "Implement feature." });
+
+    let state = await orchestrator.step("implement-nudge");
+    for (let index = 0; index < 11 && state.phase !== "PAUSED"; index += 1) state = await orchestrator.step(state.id);
+
+    expect(governance.length).toBeGreaterThanOrEqual(9);
+    expect(governance[2]).not.toContain("Stop editing code");
+    expect(governance[8]).toContain("Stop editing code");
+  });
+
   it("persists an interrupted active phase for deterministic recovery", async () => {
     const fixture = await scenario([]);
     let state = await fixture.orchestrator.step(fixture.taskId);

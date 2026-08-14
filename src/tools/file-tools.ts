@@ -220,7 +220,7 @@ async function applyPatchAction(
   if (!metadata.isFile()) throw invalidInput("apply_patch requires a regular file.");
   const original = await readFile(target);
   assertText(original, "Patched file");
-  const updated = applyUnifiedDiff(original, action.path, action.patch);
+  const updated = applyUnifiedDiff(original, action.path, normalizePatch(action.path, action.patch, original));
   if (updated.byteLength > MiB) throw invalidInput("Patched file exceeds the 1 MiB byte limit.");
   const temporary = await workspaceTemporaryPath(options.workspaceRoot, target);
   await writeFile(temporary, updated, { flag: "wx" });
@@ -261,6 +261,58 @@ interface Hunk {
   newStart: number;
   newCount: number;
   lines: DiffLine[];
+}
+
+// Normalize the model patch dialects accepted by the action schema into a
+// strict unified diff: Claude-style whole-file blocks become full-replacement
+// diffs, and bare hunks without file headers get synthesized coordinates.
+function normalizePatch(path: string, patch: string, original: Buffer): string {
+  const lines = patch.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines[0] === "*** Begin Patch") return claudeBlockToUnifiedDiff(path, lines, original);
+  if (lines[0] === `--- a/${path}` && lines[1] === `+++ b/${path}`) return patch;
+  return [`--- a/${path}`, `+++ b/${path}`, ...lines.map((line, index, all) => {
+    if (line !== "@@" && !line.startsWith("@@ ")) return line;
+    let cursor = index + 1;
+    let oldCount = 0;
+    let newCount = 0;
+    while (cursor < all.length && !(all[cursor] === "@@" || all[cursor]!.startsWith("@@ "))) {
+      const prefix = all[cursor]![0];
+      if (prefix === "-" || prefix === " ") oldCount += 1;
+      if (prefix === "+" || prefix === " ") newCount += 1;
+      cursor += 1;
+    }
+    const oldCoordinate = oldCount === 0 ? "0,0" : `1,${oldCount}`;
+    const newCoordinate = newCount === 0 ? "0,0" : `1,${newCount}`;
+    return `@@ -${oldCoordinate} +${newCoordinate} @@`;
+  })].join("\n") + "\n";
+}
+
+function claudeBlockToUnifiedDiff(path: string, lines: string[], original: Buffer): string {
+  const directiveIndex = lines.findIndex((line) => /^\*\*\* (?:Update|Add|Delete) File: .+$/.test(line.trim()));
+  if (directiveIndex < 0) throw patchConflict("Begin Patch block has no file directive.");
+  const endIndex = lines.indexOf("*** End Patch");
+  if (endIndex < directiveIndex) throw patchConflict("Begin Patch block is malformed.");
+  const operation = /^\*\*\* (Update|Add|Delete) File:/.exec(lines[directiveIndex]!)![1];
+  const newContent = operation === "Delete"
+    ? ""
+    : `${lines.slice(directiveIndex + 1, endIndex).join("\n")}\n`;
+  const oldLines = splitSourceText(new TextDecoder("utf-8", { fatal: true }).decode(original));
+  const newLines = splitSourceText(newContent);
+  const body = [
+    ...oldLines.map((line) => `-${line}`),
+    ...newLines.map((line) => `+${line}`),
+  ];
+  const oldCoordinate = oldLines.length === 0 ? "0,0" : `1,${oldLines.length}`;
+  const newCoordinate = newLines.length === 0 ? "0,0" : `1,${newLines.length}`;
+  return [`--- a/${path}`, `+++ b/${path}`, `@@ -${oldCoordinate} +${newCoordinate} @@`, ...body].join("\n") + "\n";
+}
+
+function splitSourceText(text: string): string[] {
+  if (text.length === 0) return [];
+  const lines = text.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  return lines;
 }
 
 function applyUnifiedDiff(original: Buffer, path: string, patch: string): Buffer {

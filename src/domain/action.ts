@@ -19,10 +19,11 @@ const ApplyPatchSchema = ActionBaseSchema.extend({
 })
   .strict()
   .superRefine(({ path, patch }, context) => {
-    const headers = patch.replaceAll("\r\n", "\n").split("\n")
-      .filter((line) => line.startsWith("--- ") || line.startsWith("+++ "));
-    if (headers.length !== 2 || headers[0] !== `--- a/${path}` || headers[1] !== `+++ b/${path}`) {
-      context.addIssue({ code: "custom", message: "Patch must contain exactly one matching unified diff file header pair." });
+    if (!isNormalizablePatch(patch, path)) {
+      context.addIssue({
+        code: "custom",
+        message: "Patch must be one matching unified diff, a bare hunk set, or a single-file Begin Patch block.",
+      });
     }
   });
 
@@ -49,5 +50,29 @@ export const ObservationSchema = z.object({
   error: SerializedSentinelErrorSchema.nullable()
 }).strict();
 export type Observation = z.infer<typeof ObservationSchema>;
+
+// Models emit several patch dialects (classic unified diffs, bare hunks
+// without file headers, and Claude-style *** Begin Patch blocks). The schema
+// accepts any single-file form that the file tool can normalize to a unified
+// diff; mismatched classic headers and multi-file patches stay rejected.
+function isNormalizablePatch(patch: string, path: string): boolean {
+  const lines = patch.replaceAll("\r\n", "\n").split("\n");
+  if (lines.at(-1) === "") lines.pop();
+  if (lines[0] === "*** Begin Patch") {
+    const directives = lines.filter((line) => /^\*\*\* (?:Update|Add|Delete) File: .+$/.test(line.trim()));
+    if (directives.length !== 1 || lines.at(-1) !== "*** End Patch") return false;
+    const target = /^\*\*\* (?:Update|Add|Delete) File: (.+)$/.exec(directives[0]!)?.[1];
+    return target === path;
+  }
+  const headers = lines.filter((line) => line.startsWith("--- ") || line.startsWith("+++ "));
+  if (headers.length === 0) {
+    return lines.some((line) => line === "@@" || /^@@\s/.test(line))
+      && lines.every((line) => !line.startsWith("--- ") && !line.startsWith("+++ "));
+  }
+  return headers.length === 2
+    && headers[0] === `--- a/${path}`
+    && headers[1] === `+++ b/${path}`
+    && lines.slice(2).every((line) => !line.startsWith("--- ") && !line.startsWith("+++ "));
+}
 
 export { SentinelErrorCodeSchema };
