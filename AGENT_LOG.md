@@ -99,3 +99,14 @@
 - Commits: `5bf87fe`, `4f3a0aa`.
 - Human intervention: none.
 - Lesson: environment prechecks require an explicit error-precedence policy, and structured process arguments make whitespace heuristics both unnecessary and harmful to Windows portability.
+
+## 2026-08-14 — Task 4 governance and frozen-test baseline
+
+- Task: IMPL-04, path confinement, sensitive-path policy, versioned test baseline and one-time approval lifecycle.
+- Initial green: 40 governance tests and 99 full tests; review found 1 Critical and 4 Important gaps.
+- Fix evidence: 10 security-boundary REDs, 4 baseline REDs, approval lifecycle REDs, plus symlink-alias and complete 12x8 phase/action matrix REDs; all were turned green.
+- Final green: 72 focused governance/domain tests and 120 full tests; typecheck, lint, build and diff checks passed.
+- Final review: all findings addressed; 0 Critical/Important/Minor, Spec Compliance PASS and Task Quality PASS.
+- Commits: `063786a`, `3f7341d`.
+- Human intervention: none.
+- Lesson: approval metadata is not a baseline update; an approved mutation must recapture content hashes and advance a restorable versioned artifact.

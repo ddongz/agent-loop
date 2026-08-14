@@ -192,7 +192,7 @@ git add src/repository tests/helpers tests/integration/repository tests/unit/rep
 git commit -m "feat(repository): enforce clean repository precheck"
 ```
 
-### Task 4: Governance, path confinement and frozen tests
+### Task 4: Governance, path confinement and frozen tests — COMPLETE (`063786a`, `3f7341d`)
 
 **Files:**
 - Create: `src/governance/path-policy.ts`, `src/governance/test-baseline.ts`, `src/governance/policy-engine.ts`, `src/governance/approval.ts`
@@ -202,36 +202,36 @@ git commit -m "feat(repository): enforce clean repository precheck"
 - Produces: `resolveWorkspacePath(root, relative): Promise<string>`; `TestBaseline.freeze/verify`; `PolicyEngine.evaluate(context, action): Promise<PolicyDecision>` where decision is `ALLOW | DENY | REQUIRE_APPROVAL`.
 - Consumes: `Action`, `TaskPhase`, domain errors.
 
-- [ ] **Step 1: Write failing escape and phase-policy tests**
+- [x] **Step 1: Write failing escape and phase-policy tests**
 
 ```ts
 await expect(resolveWorkspacePath(root, "../secret.txt")).rejects.toMatchObject({ code: "PATH_ESCAPE" });
 expect(await policy.evaluate({ phase: "GENERATE_TESTS" }, productionWrite)).toEqual(expect.objectContaining({ kind: "DENY" }));
 ```
 
-- [ ] **Step 2: Write failing frozen-baseline tests**
+- [x] **Step 2: Write failing frozen-baseline tests**
 
 Freeze `tests/feature.test.ts`, change its content, and assert `verify()` returns a mismatch; assert a write action against it yields `REQUIRE_APPROVAL` before any tool is called.
 
-- [ ] **Step 3: Run governance tests and capture red**
+- [x] **Step 3: Run governance tests and capture red**
 
 Run: `npm test -- tests/unit/governance`  
 Expected: FAIL with missing modules.
 
-- [ ] **Step 4: Implement path/symlink confinement and SHA-256 baselines**
+- [x] **Step 4: Implement path/symlink confinement and SHA-256 baselines**
 
 Resolve the nearest existing ancestor with `realpath`, reconstruct the target, verify it remains below root, and repeat immediately before writes. Store normalized relative paths, hashes, diff and confirmation metadata.
 
-- [ ] **Step 5: Implement phase permissions and exact one-time approval records**
+- [x] **Step 5: Implement phase permissions and exact one-time approval records**
 
 Before `FREEZE_TESTS`, only test-pattern writes are allowed; afterward protected tests require approval. Unknown tools and sensitive paths are denied. Approval binds action ID, normalized arguments and baseline version.
 
-- [ ] **Step 6: Run governance and type checks**
+- [x] **Step 6: Run governance and type checks**
 
 Run: `npm test -- tests/unit/governance && npm run typecheck`  
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/governance tests/unit/governance
