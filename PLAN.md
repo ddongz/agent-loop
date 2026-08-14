@@ -485,7 +485,7 @@ git add src/config src/credentials src/reporting src/cli src/index.ts tests/unit
 git commit -m "feat(cli): add credentials commands and task interface"
 ```
 
-### Task 10: Required mechanism demonstrations
+### Task 10: Required mechanism demonstrations — COMPLETE (`81396c5`, `a7b6cf4`)
 
 **Files:**
 - Create: `scripts/mechanism-demo.ts`
@@ -496,33 +496,33 @@ git commit -m "feat(cli): add credentials commands and task interface"
 - Produces: `npm run demo` with three deterministic named scenarios.
 - Consumes: real harness components with Scripted LLM and temporary repositories.
 
-- [ ] **Step 1: Write failing governance demo**
+- [x] **Step 1: Write failing governance demo**
 
 Assert a path escape or protected-test action produces `DENY/REQUIRE_APPROVAL`, tool spy call count remains zero, and an audit event names the rule.
 
-- [ ] **Step 2: Write failing feedback demo**
+- [x] **Step 2: Write failing feedback demo**
 
 Assert the scripted client refuses repair without expected fingerprint, receives it after injected failure, changes action, and reaches SUCCEEDED after validation.
 
-- [ ] **Step 3: Write failing main-contribution stall demo**
+- [x] **Step 3: Write failing main-contribution stall demo**
 
 Assert repeated identical failure fingerprints produce PAUSED exactly on the third unchanged implementation result and the report names `NO_PROGRESS`.
 
-- [ ] **Step 4: Run demos to capture red**
+- [x] **Step 4: Run demos to capture red**
 
 Run: `npm test -- tests/demos`  
 Expected: FAIL until scenario composition and runner exist.
 
-- [ ] **Step 5: Implement demo composition and human-readable runner**
+- [x] **Step 5: Implement demo composition and human-readable runner**
 
 The runner prints scenario name, key events, final state and PASS/FAIL, exits nonzero on any mismatch, and never contacts a network.
 
-- [ ] **Step 6: Run deterministic demos twice**
+- [x] **Step 6: Run deterministic demos twice**
 
 Run: `npm run demo && npm run demo`  
 Expected: identical normalized output and exit code 0 both times.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add scripts/mechanism-demo.ts tests/demos package.json

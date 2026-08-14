@@ -156,3 +156,10 @@
 - Evidence: four missing-module RED suites; 25 focused and 290 full tests passed; typecheck, lint, build and diff-check passed.
 - Scope remained CLI-only with no plaintext credential fallback and no WebUI.
 - Commit: `8f940a3`.
+
+## 2026-08-14 — Tasks 8–10 concentrated review and demos
+
+- Concentrated review found a non-executable CLI entry plus orchestrator precheck, confirmation, approval recovery, success-race and event-causality gaps; all Critical/Important findings were fixed in `6f1fd91` and `dbf85af`.
+- Task 10 proves governance, fingerprint-causal repair and third-unchanged pause. The feedback demo was upgraded to a real temporary Git/TypeScript repository with real precheck and validation subprocesses; only the LLM remains scripted.
+- Evidence after fixes: 29 files / 300 tests; deterministic demo output identical across two runs.
+- Commits: `81396c5`, `a7b6cf4`, `6f1fd91`, `dbf85af`.
