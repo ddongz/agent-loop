@@ -42,8 +42,8 @@ SentinelLoop 是一个 **Node.js CLI 命令行工具**,用于在一个干净的 
 cd agent-loop
 npm ci
 npm run check      # test + typecheck + lint + build
-npm pack           # 生成 sentinelloop-cli-0.1.0.tgz
-npm install -g ./sentinelloop-cli-0.1.0.tgz
+npm pack           # 生成 sentinelloop-cli-1.0.0.tgz
+npm install -g ./sentinelloop-cli-1.0.0.tgz
 sentinelloop --help
 ```
 
