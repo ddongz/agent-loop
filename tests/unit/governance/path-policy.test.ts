@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import {
+  isSensitiveWorkspacePath,
   normalizeWorkspaceRelativePath,
   resolveWorkspacePath,
 } from "../../../src/governance/path-policy.js";
@@ -41,6 +42,28 @@ describe("normalizeWorkspaceRelativePath", () => {
       );
     },
   );
+
+  it.each([
+    "packages/example/.git/config",
+    "src\\generated\\.SENTINELLOOP\\state.json",
+    "fixtures/nested/.env",
+    "fixtures/nested/.ENV.local/secret",
+  ])("rejects a sensitive segment at any depth: %s", (input) => {
+    expect(isSensitiveWorkspacePath(input)).toBe(true);
+    expect(() => normalizeWorkspaceRelativePath(input)).toThrowError(
+      expect.objectContaining({ code: "POLICY_DENIED" }),
+    );
+  });
+
+  it("exports a non-throwing sensitivity predicate for ordinary paths", () => {
+    expect(isSensitiveWorkspacePath("src/environment.ts")).toBe(false);
+  });
+
+  it("enforces the shared 1..4096 path-length boundary", () => {
+    expect(() => normalizeWorkspaceRelativePath("a".repeat(4_097))).toThrowError(
+      expect.objectContaining({ code: "PATH_ESCAPE" }),
+    );
+  });
 });
 
 describe("resolveWorkspacePath", () => {
@@ -86,5 +109,23 @@ describe("resolveWorkspacePath", () => {
     await symlink(sibling, join(root, "escape"), process.platform === "win32" ? "junction" : "dir");
 
     await expect(resolveWorkspacePath(root, "escape/file.ts")).rejects.toMatchObject({ code: "PATH_ESCAPE" });
+  });
+
+  it("converts a dangling symlink failure into a stable path escape", async () => {
+    const root = await createWorkspace();
+    const dangling = join(root, "src", "dangling");
+    await symlink(join(root, "missing-target"), dangling, process.platform === "win32" ? "junction" : "dir");
+
+    await expect(resolveWorkspacePath(root, "src/dangling/file.ts")).rejects.toMatchObject({ code: "PATH_ESCAPE" });
+  });
+
+  it("rejects a harmless-looking symlink alias that resolves into a sensitive directory", async () => {
+    const root = await createWorkspace();
+    const internal = join(root, ".git");
+    await mkdir(internal);
+    await writeFile(join(internal, "config"), "sensitive\n", "utf8");
+    await symlink(internal, join(root, "src", "alias"), process.platform === "win32" ? "junction" : "dir");
+
+    await expect(resolveWorkspacePath(root, "src/alias/config")).rejects.toMatchObject({ code: "POLICY_DENIED" });
   });
 });

@@ -14,9 +14,14 @@ export type PolicyReasonCode =
   | "ONE_TIME_APPROVAL_CONSUMED"
   | ApprovalFailureReason;
 
+export interface PolicyConstraint {
+  kind: "EXCLUDE_SENSITIVE_PATHS_RECURSIVELY";
+}
+
 export type PolicyDecision = {
   kind: "ALLOW" | "DENY" | "REQUIRE_APPROVAL";
   reasonCode: PolicyReasonCode;
+  constraints?: readonly PolicyConstraint[];
 };
 
 export interface PolicyContext {
@@ -27,7 +32,20 @@ export interface PolicyContext {
   approvals?: ApprovalManager;
 }
 
-const readActions = new Set<Action["type"]>(["read_file", "list_files", "search_files"]);
+const phasePermissions: Readonly<Record<TaskPhase, ReadonlySet<Action["type"]>>> = {
+  PRECHECK: new Set(),
+  ANALYZE_REQUIREMENT: new Set(["read_file", "list_files", "search_files", "request_clarification"]),
+  GENERATE_TESTS: new Set(["read_file", "list_files", "search_files", "create_file", "apply_patch", "run_validation", "request_clarification"]),
+  CONFIRM_RED: new Set(["run_validation"]),
+  FREEZE_TESTS: new Set(),
+  IMPLEMENT: new Set(["read_file", "list_files", "search_files", "create_file", "apply_patch", "run_validation", "finish", "request_clarification"]),
+  VALIDATE: new Set(["run_validation"]),
+  FEEDBACK: new Set(),
+  AWAITING_APPROVAL: new Set(),
+  PAUSED: new Set(),
+  SUCCEEDED: new Set(),
+  FAILED: new Set(),
+};
 
 export class PolicyEngine {
   async evaluate(context: PolicyContext, action: Action): Promise<PolicyDecision> {
@@ -58,23 +76,15 @@ export class PolicyEngine {
       return deny(consumption.reasonCode);
     }
 
+    if (action.type === "list_files" || action.type === "search_files") {
+      return allow("PHASE_ACTION_ALLOWED", [{ kind: "EXCLUDE_SENSITIVE_PATHS_RECURSIVELY" }]);
+    }
     return allow("PHASE_ACTION_ALLOWED");
   }
 }
 
 function isAllowedInPhase(phase: TaskPhase, type: Action["type"]): boolean {
-  if (readActions.has(type)) {
-    return phase !== "AWAITING_APPROVAL" && phase !== "PAUSED" && phase !== "SUCCEEDED" && phase !== "FAILED";
-  }
-  if (type === "create_file" || type === "apply_patch") return phase === "GENERATE_TESTS" || phase === "IMPLEMENT";
-  if (type === "run_validation") {
-    return phase === "GENERATE_TESTS" || phase === "CONFIRM_RED" || phase === "IMPLEMENT" || phase === "VALIDATE";
-  }
-  if (type === "finish") return phase === "IMPLEMENT" || phase === "FEEDBACK";
-  if (type === "request_clarification") {
-    return phase === "ANALYZE_REQUIREMENT" || phase === "GENERATE_TESTS" || phase === "IMPLEMENT" || phase === "FEEDBACK";
-  }
-  return false;
+  return phasePermissions[phase].has(type);
 }
 
 function isWrite(action: Action): action is Extract<Action, { type: "create_file" | "apply_patch" }> {
@@ -97,8 +107,13 @@ function comparisonKey(path: string): string {
   return process.platform === "win32" ? path.toLocaleLowerCase("en-US") : path;
 }
 
-function allow(reasonCode: Extract<PolicyReasonCode, "PHASE_ACTION_ALLOWED" | "ONE_TIME_APPROVAL_CONSUMED">): PolicyDecision {
-  return { kind: "ALLOW", reasonCode };
+function allow(
+  reasonCode: Extract<PolicyReasonCode, "PHASE_ACTION_ALLOWED" | "ONE_TIME_APPROVAL_CONSUMED">,
+  constraints?: readonly PolicyConstraint[],
+): PolicyDecision {
+  return constraints === undefined
+    ? { kind: "ALLOW", reasonCode }
+    : { kind: "ALLOW", reasonCode, constraints };
 }
 
 function deny(reasonCode: Exclude<PolicyReasonCode, "PHASE_ACTION_ALLOWED" | "PROTECTED_TEST_MUTATION" | "ONE_TIME_APPROVAL_CONSUMED">): PolicyDecision {

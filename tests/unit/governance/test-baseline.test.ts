@@ -3,6 +3,7 @@ import { dirname, join } from "node:path";
 
 import { afterEach, describe, expect, it } from "vitest";
 
+import { TestBaselineSchema } from "../../../src/domain/task.js";
 import { TestBaseline } from "../../../src/governance/test-baseline.js";
 import { createTempRepository } from "../../helpers/temp-repository.js";
 
@@ -147,7 +148,7 @@ describe("TestBaseline", () => {
     expect(result).toMatchObject({ matches: false, expectedVersion: 4, actualVersion: 3 });
   });
 
-  it("records a confirmed approved successor version without mutating the frozen instance", async () => {
+  it("creates an approved successor with fresh hashes and makes it the verifiable current version", async () => {
     const root = await repository();
     await put(root, "tests/feature.test.ts", "v1\n");
     const baseline = await TestBaseline.freeze({
@@ -157,10 +158,137 @@ describe("TestBaseline", () => {
       confirmedAt: "2026-08-14T10:00:00.000Z",
       version: 1,
     });
+    await put(root, "tests/feature.test.ts", "v2\n");
 
-    const successor = baseline.recordApprovedVersion(2, "2026-08-14T11:00:00.000Z");
+    const successor = await baseline.approveMutation({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v2",
+      approvedAt: "2026-08-14T11:00:00.000Z",
+    });
 
+    expect(baseline.version).toBe(1);
     expect(baseline.approvedVersions).toEqual([]);
+    expect(successor.version).toBe(2);
     expect(successor.approvedVersions).toEqual([{ version: 2, approvedAt: "2026-08-14T11:00:00.000Z" }]);
+    expect(successor.protectedTests).toEqual([{
+      path: "tests/feature.test.ts",
+      sha256: "81db67b6a5702b9b68f0016f061c409bf3fb16d062fc854d1b424bb4e9c28c56",
+      frozenAt: "2026-08-14T11:00:00.000Z",
+    }]);
+    await expect(successor.verify({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      baselineVersion: 2,
+    })).resolves.toMatchObject({ matches: true, expectedVersion: 2, actualVersion: 2 });
+    await expect(successor.verify({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      baselineVersion: 1,
+    })).resolves.toMatchObject({ matches: false, expectedVersion: 2, actualVersion: 1 });
+    expect(successor.taskStateSummary()).toEqual({
+      protectedTests: successor.protectedTests,
+      baselineVersion: 2,
+    });
   });
+
+  it("requires strictly increasing approval timestamps and advances versions exactly once", async () => {
+    const root = await repository();
+    await put(root, "tests/feature.test.ts", "v1\n");
+    const baseline = await TestBaseline.freeze({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v1",
+      confirmedAt: "2026-08-14T10:00:00.000Z",
+      version: 3,
+    });
+
+    await expect(baseline.approveMutation({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v2",
+      approvedAt: "2026-08-14T10:00:00.000Z",
+    })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+    const successor = await baseline.approveMutation({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v2",
+      approvedAt: "2026-08-14T11:00:00.000Z",
+    });
+
+    expect(successor.version).toBe(4);
+    await expect(successor.approveMutation({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v3",
+      approvedAt: "2026-08-14T10:59:59.000Z",
+    })).rejects.toMatchObject({ code: "INVALID_INPUT" });
+  });
+
+  it("round-trips a strict persisted snapshot and restores verification behavior", async () => {
+    const root = await repository();
+    await put(root, "tests/feature.test.ts", "v1\n");
+    const baseline = await TestBaseline.freeze({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      frozenDiff: "diff-v1",
+      confirmedAt: "2026-08-14T10:00:00.000Z",
+    });
+    const snapshot = baseline.snapshot();
+
+    expect(TestBaselineSchema.parse(snapshot)).toEqual(snapshot);
+    const restored = TestBaseline.restore(JSON.parse(JSON.stringify(snapshot)) as unknown);
+    expect(restored.snapshot()).toEqual(snapshot);
+    await expect(restored.verify({
+      root,
+      testPaths: ["tests/feature.test.ts"],
+      baselineVersion: 1,
+    })).resolves.toMatchObject({ matches: true });
+  });
+
+  it("rejects non-monotonic or structurally inconsistent persisted histories", () => {
+    const entry = {
+      version: 1,
+      protectedTests: [{ path: "tests/feature.test.ts", sha256: "a".repeat(64), frozenAt: "2026-08-14T10:00:00.000Z" }],
+      frozenDiff: "diff-v1",
+      confirmedAt: "2026-08-14T10:00:00.000Z",
+      approval: null,
+    };
+    const invalid = {
+      schemaVersion: 1,
+      currentVersion: 3,
+      versions: [
+        entry,
+        {
+          ...entry,
+          version: 3,
+          confirmedAt: "2026-08-14T09:00:00.000Z",
+          approval: { previousVersion: 1, approvedAt: "2026-08-14T09:00:00.000Z" },
+        },
+      ],
+    };
+
+    expect(() => TestBaseline.restore(invalid)).toThrowError();
+  });
+
+  it.each([".git/config", "tests/.env.local", "C:/outside.test.ts"])(
+    "rejects persisted baseline path that cannot pass the canonical path policy: %s",
+    (path) => {
+      const snapshot = {
+        schemaVersion: 1,
+        currentVersion: 1,
+        versions: [{
+          version: 1,
+          protectedTests: [{ path, sha256: "a".repeat(64), frozenAt: "2026-08-14T10:00:00.000Z" }],
+          frozenDiff: "diff",
+          confirmedAt: "2026-08-14T10:00:00.000Z",
+          approval: null,
+        }],
+      };
+
+      expect(() => TestBaseline.restore(snapshot)).toThrowError(
+        expect.objectContaining({ code: "STATE_CORRUPT" }),
+      );
+    },
+  );
 });

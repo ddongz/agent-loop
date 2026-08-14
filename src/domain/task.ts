@@ -74,10 +74,67 @@ export const TaskEventSchema = z.object({
 }).strict();
 export type TaskEvent = z.infer<typeof TaskEventSchema>;
 
+export const TestBaselineVersionSchema = z.object({
+  version: z.number().int().positive(),
+  protectedTests: z.array(ProtectedTestRefSchema).min(1),
+  frozenDiff: z.string(),
+  confirmedAt: isoTimestampSchema,
+  approval: z.object({
+    previousVersion: z.number().int().positive(),
+    approvedAt: isoTimestampSchema,
+  }).strict().nullable(),
+}).strict().superRefine((version, context) => {
+  const paths = version.protectedTests.map(({ path }) => path);
+  if (new Set(paths).size !== paths.length) {
+    context.addIssue({ code: "custom", message: "A baseline version cannot contain duplicate test paths." });
+  }
+  for (const test of version.protectedTests) {
+    const normalizedSegments = test.path.split("/");
+    if (
+      test.path.length < 1
+      || test.path.length > 4_096
+      || test.path.includes("\\")
+      || test.path.startsWith("/")
+      || normalizedSegments.some((segment) => segment.length === 0 || segment === "." || segment === "..")
+    ) {
+      context.addIssue({ code: "custom", message: "Baseline test paths must be normalized repository-relative POSIX paths." });
+    }
+    if (test.frozenAt !== version.confirmedAt) {
+      context.addIssue({ code: "custom", message: "Protected-test freeze timestamps must match their baseline version." });
+    }
+  }
+});
+export type TestBaselineVersion = z.infer<typeof TestBaselineVersionSchema>;
+
 export const TestBaselineSchema = z.object({
-  protectedTests: z.array(ProtectedTestRefSchema), frozenDiff: z.string(), confirmedAt: isoTimestampSchema,
-  approvedVersions: z.array(z.object({ version: z.number().int().nonnegative(), approvedAt: isoTimestampSchema }).strict())
-}).strict();
+  schemaVersion: z.literal(1),
+  currentVersion: z.number().int().positive(),
+  versions: z.array(TestBaselineVersionSchema).min(1),
+}).strict().superRefine((baseline, context) => {
+  const last = baseline.versions.at(-1);
+  if (last?.version !== baseline.currentVersion) {
+    context.addIssue({ code: "custom", message: "Current baseline version must identify the latest history entry." });
+  }
+  baseline.versions.forEach((version, index) => {
+    const previous = baseline.versions[index - 1];
+    if (index === 0) {
+      if (version.approval !== null) {
+        context.addIssue({ code: "custom", message: "The initial baseline version cannot be an approved mutation." });
+      }
+      return;
+    }
+    if (
+      previous === undefined
+      || version.version !== previous.version + 1
+      || Date.parse(version.confirmedAt) <= Date.parse(previous.confirmedAt)
+      || version.approval === null
+      || version.approval.previousVersion !== previous.version
+      || version.approval.approvedAt !== version.confirmedAt
+    ) {
+      context.addIssue({ code: "custom", message: "Approved baseline versions and timestamps must be strictly monotonic." });
+    }
+  });
+});
 export type TestBaseline = z.infer<typeof TestBaselineSchema>;
 
 export const TaskStateSchema = z.object({

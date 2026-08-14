@@ -63,12 +63,12 @@ describe("domain contracts", () => {
 
   it("accepts strict event and baseline contracts", () => {
     expect(TaskEventSchema.safeParse({ schemaVersion: 1, id: "e1", taskId: "t1", sequence: 1, type: "TASK_CREATED", timestamp: now, phaseBefore: null, phaseAfter: "PRECHECK", actionId: null, observationActionId: null, causationEventId: null, payload: { ok: [true, null] } }).success).toBe(true);
-    expect(TestBaselineSchema.safeParse({ protectedTests: [{ path: "tests/a.test.ts", sha256: sha, frozenAt: now }], frozenDiff: "", confirmedAt: now, approvedVersions: [] }).success).toBe(true);
+    expect(TestBaselineSchema.safeParse({ schemaVersion: 1, currentVersion: 1, versions: [{ version: 1, protectedTests: [{ path: "tests/a.test.ts", sha256: sha, frozenAt: now }], frozenDiff: "", confirmedAt: now, approval: null }] }).success).toBe(true);
   });
 
   it("rejects unknown event fields and invalid baseline hashes", () => {
     expect(TaskEventSchema.safeParse({ schemaVersion: 1, id: "e1", taskId: "t1", sequence: 1, type: "TASK_CREATED", timestamp: now, phaseBefore: null, phaseAfter: "PRECHECK", actionId: null, observationActionId: null, causationEventId: null, payload: {}, extra: true }).success).toBe(false);
-    expect(TestBaselineSchema.safeParse({ protectedTests: [{ path: "tests/a.test.ts", sha256: "bad", frozenAt: now }], frozenDiff: "", confirmedAt: now, approvedVersions: [] }).success).toBe(false);
+    expect(TestBaselineSchema.safeParse({ schemaVersion: 1, currentVersion: 1, versions: [{ version: 1, protectedTests: [{ path: "tests/a.test.ts", sha256: "bad", frozenAt: now }], frozenDiff: "", confirmedAt: now, approval: null }] }).success).toBe(false);
   });
 
   it("serializes errors after redacting message and detail", () => {

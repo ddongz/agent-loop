@@ -1,8 +1,13 @@
 import { createHash } from "node:crypto";
 import { readFile, stat } from "node:fs/promises";
 
-import type { ProtectedTestRef } from "../domain/task.js";
 import { SentinelError } from "../domain/error.js";
+import {
+  TestBaselineSchema,
+  type ProtectedTestRef,
+  type TestBaseline as TestBaselineSnapshot,
+  type TestBaselineVersion,
+} from "../domain/task.js";
 import { normalizeWorkspaceRelativePath, resolveWorkspacePath } from "./path-policy.js";
 
 export interface FreezeBaselineInput {
@@ -11,6 +16,13 @@ export interface FreezeBaselineInput {
   frozenDiff: string;
   confirmedAt: string;
   version?: number;
+}
+
+export interface ApproveBaselineMutationInput {
+  root: string;
+  testPaths: readonly string[];
+  frozenDiff: string;
+  approvedAt: string;
 }
 
 export interface VerifyBaselineInput {
@@ -34,67 +46,137 @@ export interface ApprovedBaselineVersion {
   approvedAt: string;
 }
 
-export class TestBaseline {
-  readonly version: number;
-  readonly protectedTests: readonly ProtectedTestRef[];
-  readonly frozenDiff: string;
-  readonly confirmedAt: string;
-  readonly approvedVersions: readonly ApprovedBaselineVersion[];
+export interface TaskStateBaselineSummary {
+  protectedTests: readonly ProtectedTestRef[];
+  baselineVersion: number;
+}
 
-  private constructor(
-    version: number,
-    protectedTests: readonly ProtectedTestRef[],
-    frozenDiff: string,
-    confirmedAt: string,
-    approvedVersions: readonly ApprovedBaselineVersion[] = [],
-  ) {
-    this.version = version;
-    this.protectedTests = Object.freeze(protectedTests.map((entry) => Object.freeze({ ...entry })));
-    this.frozenDiff = frozenDiff;
-    this.confirmedAt = confirmedAt;
-    this.approvedVersions = Object.freeze(approvedVersions.map((entry) => Object.freeze({ ...entry })));
+export class TestBaseline {
+  readonly #state: TestBaselineSnapshot;
+
+  private constructor(snapshot: TestBaselineSnapshot) {
+    this.#state = freezeSnapshot(snapshot);
+  }
+
+  get version(): number {
+    return this.#state.currentVersion;
+  }
+
+  get protectedTests(): readonly ProtectedTestRef[] {
+    return this.current.protectedTests;
+  }
+
+  get frozenDiff(): string {
+    return this.current.frozenDiff;
+  }
+
+  get confirmedAt(): string {
+    return this.current.confirmedAt;
+  }
+
+  get approvedVersions(): readonly ApprovedBaselineVersion[] {
+    return this.#state.versions.flatMap((entry) => entry.approval === null
+      ? []
+      : [{ version: entry.version, approvedAt: entry.approval.approvedAt }]);
+  }
+
+  private get current(): TestBaselineVersion {
+    const current = this.#state.versions.at(-1);
+    if (current === undefined) throw new SentinelError({ code: "STATE_CORRUPT", message: "Baseline history is empty." });
+    return current;
   }
 
   static async freeze(input: FreezeBaselineInput): Promise<TestBaseline> {
     assertTimestamp(input.confirmedAt);
     const version = input.version ?? 1;
     if (!Number.isInteger(version) || version < 1) invalidBaseline("Baseline version must be a positive integer.");
-    if (input.testPaths.length === 0) invalidBaseline("A baseline requires at least one target test.");
+    const protectedTests = await captureTests(input.root, input.testPaths, input.confirmedAt);
+    return TestBaseline.restore({
+      schemaVersion: 1,
+      currentVersion: version,
+      versions: [{
+        version,
+        protectedTests,
+        frozenDiff: input.frozenDiff,
+        confirmedAt: input.confirmedAt,
+        approval: null,
+      }],
+    });
+  }
 
-    const { normalized, duplicates } = normalizeSet(input.testPaths);
-    if (duplicates.length > 0) invalidBaseline("A baseline cannot contain duplicate normalized test paths.");
-
-    const protectedTests = await Promise.all(normalized.map(async (path): Promise<ProtectedTestRef> => {
-      const absolute = await resolveWorkspacePath(input.root, path);
-      let metadata;
-      try {
-        metadata = await stat(absolute);
-      } catch (error) {
-        throw invalidBaselineError(`Cannot freeze missing test: ${path}`, error);
+  static restore(snapshot: unknown): TestBaseline {
+    const parsed = TestBaselineSchema.safeParse(snapshot);
+    if (!parsed.success) {
+      throw new SentinelError({
+        code: "STATE_CORRUPT",
+        message: "Persisted test baseline is invalid.",
+        detail: { issues: parsed.error.issues.map(({ message }) => message) },
+      });
+    }
+    try {
+      for (const version of parsed.data.versions) {
+        for (const test of version.protectedTests) {
+          if (normalizeWorkspaceRelativePath(test.path) !== test.path) {
+            throw new Error("Path is not in canonical repository-relative POSIX form.");
+          }
+        }
       }
-      if (!metadata.isFile()) throw invalidBaselineError(`Cannot freeze a non-file test: ${path}`);
-      return {
-        path,
-        sha256: sha256(await readFile(absolute)),
-        frozenAt: input.confirmedAt,
-      };
-    }));
+    } catch (error) {
+      throw new SentinelError({
+        code: "STATE_CORRUPT",
+        message: "Persisted test baseline contains a path rejected by workspace policy.",
+        cause: error,
+      });
+    }
+    return new TestBaseline(parsed.data);
+  }
 
-    return new TestBaseline(version, protectedTests, input.frozenDiff, input.confirmedAt);
+  snapshot(): TestBaselineSnapshot {
+    return TestBaselineSchema.parse(this.#state);
+  }
+
+  taskStateSummary(): TaskStateBaselineSummary {
+    return {
+      protectedTests: this.protectedTests.map((entry) => ({ ...entry })),
+      baselineVersion: this.version,
+    };
+  }
+
+  async approveMutation(input: ApproveBaselineMutationInput): Promise<TestBaseline> {
+    assertTimestamp(input.approvedAt);
+    if (Date.parse(input.approvedAt) <= Date.parse(this.confirmedAt)) {
+      invalidBaseline("An approved baseline mutation must have a strictly newer timestamp.");
+    }
+    const protectedTests = await captureTests(input.root, input.testPaths, input.approvedAt);
+    const version = this.version + 1;
+    return TestBaseline.restore({
+      schemaVersion: 1,
+      currentVersion: version,
+      versions: [
+        ...this.#state.versions,
+        {
+          version,
+          protectedTests,
+          frozenDiff: input.frozenDiff,
+          confirmedAt: input.approvedAt,
+          approval: { previousVersion: this.version, approvedAt: input.approvedAt },
+        },
+      ],
+    });
   }
 
   async verify(input: VerifyBaselineInput): Promise<BaselineVerification> {
     const { normalized, duplicates } = normalizeSet(input.testPaths);
-    const current = new Set(normalized);
-    const frozen = new Set(this.protectedTests.map(({ path }) => path));
+    const currentPaths = new Set(normalized);
+    const frozenPaths = new Set(this.protectedTests.map(({ path }) => path));
     const missingPaths = this.protectedTests
-      .filter(({ path }) => !current.has(path))
+      .filter(({ path }) => !currentPaths.has(path))
       .map(({ path }) => path);
-    const addedPaths = normalized.filter((path) => !frozen.has(path));
+    const addedPaths = normalized.filter((path) => !frozenPaths.has(path));
     const changedPaths: string[] = [];
 
     for (const entry of this.protectedTests) {
-      if (!current.has(entry.path)) continue;
+      if (!currentPaths.has(entry.path)) continue;
       try {
         const absolute = await resolveWorkspacePath(input.root, entry.path);
         const metadata = await stat(absolute);
@@ -123,20 +205,24 @@ export class TestBaseline {
       duplicatePaths: duplicates,
     };
   }
+}
 
-  recordApprovedVersion(version: number, approvedAt: string): TestBaseline {
-    assertTimestamp(approvedAt);
-    if (!Number.isInteger(version) || version <= this.version || this.approvedVersions.some((entry) => entry.version === version)) {
-      invalidBaseline("An approved baseline version must be unique and newer than the frozen version.");
+async function captureTests(root: string, paths: readonly string[], frozenAt: string): Promise<ProtectedTestRef[]> {
+  if (paths.length === 0) invalidBaseline("A baseline requires at least one target test.");
+  const { normalized, duplicates } = normalizeSet(paths);
+  if (duplicates.length > 0) invalidBaseline("A baseline cannot contain duplicate normalized test paths.");
+
+  return Promise.all(normalized.map(async (path): Promise<ProtectedTestRef> => {
+    const absolute = await resolveWorkspacePath(root, path);
+    let metadata;
+    try {
+      metadata = await stat(absolute);
+    } catch (error) {
+      throw invalidBaselineError(`Cannot freeze missing test: ${path}`, error);
     }
-    return new TestBaseline(
-      this.version,
-      this.protectedTests,
-      this.frozenDiff,
-      this.confirmedAt,
-      [...this.approvedVersions, { version, approvedAt }].sort((left, right) => left.version - right.version),
-    );
-  }
+    if (!metadata.isFile()) throw invalidBaselineError(`Cannot freeze a non-file test: ${path}`);
+    return { path, sha256: sha256(await readFile(absolute)), frozenAt };
+  }));
 }
 
 function normalizeSet(paths: readonly string[]): { normalized: string[]; duplicates: string[] } {
@@ -151,6 +237,15 @@ function normalizeSet(paths: readonly string[]): { normalized: string[]; duplica
     seen.add(path);
   }
   return { normalized: [...seen].sort(comparePaths), duplicates: [...duplicates] };
+}
+
+function freezeSnapshot(snapshot: TestBaselineSnapshot): TestBaselineSnapshot {
+  const versions = snapshot.versions.map((entry) => Object.freeze({
+    ...entry,
+    protectedTests: Object.freeze(entry.protectedTests.map((test) => Object.freeze({ ...test }))),
+    approval: entry.approval === null ? null : Object.freeze({ ...entry.approval }),
+  }));
+  return Object.freeze({ ...snapshot, versions: Object.freeze(versions) }) as unknown as TestBaselineSnapshot;
 }
 
 function sha256(content: Uint8Array): string {

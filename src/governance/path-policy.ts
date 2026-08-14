@@ -5,8 +5,18 @@ import { SentinelError } from "../domain/error.js";
 
 const sensitiveSegments = new Set([".git", ".sentinelloop"]);
 
+export function isSensitiveWorkspacePath(input: string): boolean {
+  const normalized = posix.normalize(input.replaceAll("\\", "/"));
+  return normalized.split("/").some((segment) => {
+    const comparison = segment.toLocaleLowerCase("en-US");
+    return sensitiveSegments.has(comparison)
+      || comparison === ".env"
+      || comparison.startsWith(".env.");
+  });
+}
+
 export function normalizeWorkspaceRelativePath(input: string): string {
-  if (input.length === 0 || input.includes("\0") || isAbsolute(input) || win32.isAbsolute(input)) {
+  if (input.length === 0 || input.length > 4_096 || input.includes("\0") || isAbsolute(input) || win32.isAbsolute(input)) {
     throw pathEscape(input, "Path must be a non-empty repository-relative path.");
   }
 
@@ -16,19 +26,8 @@ export function normalizeWorkspaceRelativePath(input: string): string {
     throw pathEscape(input, "Path traversal is outside the workspace.");
   }
 
-  const segments = normalized.split("/");
-  const first = segments[0]?.toLocaleLowerCase("en-US");
-  if (
-    first === undefined
-    || sensitiveSegments.has(first)
-    || first === ".env"
-    || first.startsWith(".env.")
-  ) {
-    throw new SentinelError({
-      code: "POLICY_DENIED",
-      message: "Sensitive internal paths are not available to agent actions.",
-      detail: { path: normalized },
-    });
+  if (isSensitiveWorkspacePath(normalized)) {
+    throw sensitivePath(normalized);
   }
 
   return normalized;
@@ -36,7 +35,7 @@ export function normalizeWorkspaceRelativePath(input: string): string {
 
 export async function resolveWorkspacePath(root: string, input: string): Promise<string> {
   const normalized = normalizeWorkspaceRelativePath(input);
-  const realRoot = await realpath(root);
+  const realRoot = await realpathOrEscape(root, input);
   const lexicalTarget = resolve(realRoot, ...normalized.split("/"));
   assertContained(realRoot, lexicalTarget, input);
 
@@ -49,11 +48,24 @@ export async function resolveWorkspacePath(root: string, input: string): Promise
     ancestor = parent;
   }
 
-  const realAncestor = await realpath(ancestor);
+  const realAncestor = await realpathOrEscape(ancestor, input);
   assertContained(realRoot, realAncestor, input);
   const target = suffix.length === 0 ? realAncestor : join(realAncestor, ...suffix);
   assertContained(realRoot, target, input);
+  const resolvedRelativePath = relative(realRoot, target).replaceAll(sep, "/");
+  if (isSensitiveWorkspacePath(resolvedRelativePath)) throw sensitivePath(input);
   return target;
+}
+
+async function realpathOrEscape(path: string, input: string): Promise<string> {
+  try {
+    return await realpath(path);
+  } catch (error) {
+    if (isUnresolvableLinkError(error)) {
+      throw pathEscape(input, "A workspace path ancestor is a dangling or unresolvable link.");
+    }
+    throw error;
+  }
 }
 
 async function exists(path: string): Promise<boolean> {
@@ -72,6 +84,12 @@ function isMissingPathError(error: unknown): error is NodeJS.ErrnoException {
     && (error.code === "ENOENT" || error.code === "ENOTDIR");
 }
 
+function isUnresolvableLinkError(error: unknown): error is NodeJS.ErrnoException {
+  return error instanceof Error
+    && "code" in error
+    && (error.code === "ENOENT" || error.code === "ENOTDIR" || error.code === "ELOOP");
+}
+
 function assertContained(root: string, candidate: string, input: string): void {
   const relativePath = relative(root, candidate);
   const escaped = relativePath === ".."
@@ -82,4 +100,12 @@ function assertContained(root: string, candidate: string, input: string): void {
 
 function pathEscape(path: string, message: string): SentinelError {
   return new SentinelError({ code: "PATH_ESCAPE", message, detail: { path } });
+}
+
+function sensitivePath(path: string): SentinelError {
+  return new SentinelError({
+    code: "POLICY_DENIED",
+    message: "Sensitive internal paths are not available to agent actions.",
+    detail: { path },
+  });
 }
