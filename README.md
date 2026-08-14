@@ -1,4 +1,4 @@
-当然。下面是完整中文翻译，我会尽量保留原文的技术含义、结构和命令格式。
+github链接：https://github.com/ddongz/agent-loop
 
 # SentinelLoop
 
@@ -281,38 +281,3 @@ sentinelloop resume <task-id>
 
 如果系统要求审批，还需要显式批准。
 
-## 交付说明与许可证
-
-本项目有意设计为**纯 CLI 项目**。
-
-根据助教后续给出的澄清要求，交付方式由：
-
-**WebUI**
-
-替换为：
-
-**GitHub Release 链接 + 附带的 npm tarball**
-
-创建真实的 Release 和运行远程 CI，仍然需要一个经过授权的 GitHub / NJU Git 仓库。
-
-当前源码树只是预先准备了这些工作流，并不代表这些远程操作已经真正执行。
-
-最新的本地 Release 证据、验收要求映射、密钥 / Git 历史审计，以及仅作为占位符存在的 push / PR / tag 命令，都记录在：
-
-[`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md)
-
-本地检查已经通过，但当前**没有配置远程仓库**，因此没有声称以下操作已经完成：
-
-* 远程 CI
-* Git Tag
-* GitHub Release
-
-目前剩下的唯一需要学生本人完成的验收项，是一篇**由学生本人撰写、1500–2500 个中文字符的 `REFLECTION.md`**。
-
-为了保证该反思内容确实由学生本人创作，它被有意排除在 AI 生成的证据提交之外。
-
-SentinelLoop 使用 **MIT License**。
-
-直接依赖项的许可证声明记录在：
-
-[`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md)
