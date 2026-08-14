@@ -50,6 +50,32 @@ describe("detectProgress", () => {
     ])).toEqual({ kind: "oscillating", cycleLength: 3 });
   });
 
+  it("does not fabricate a cycle from a constant failure set and alternating diffs", () => {
+    expect(detectProgress([
+      snapshot("test", ["a"], "+const value = 1;"),
+      snapshot("test", ["a"], "+const value = 2;"),
+      snapshot("test", ["a"], "+const value = 1;"),
+      snapshot("test", ["a"], "+const value = 2;"),
+    ]).kind).not.toBe("oscillating");
+  });
+
+  it("detects a true failure-set cycle even when every diff is different", () => {
+    expect(detectProgress([
+      snapshot("test", ["a"], "+const attempt = 1;"),
+      snapshot("test", ["b"], "+const attempt = 2;"),
+      snapshot("test", ["a"], "+const attempt = 3;"),
+      snapshot("test", ["b"], "+const attempt = 4;"),
+    ])).toEqual({ kind: "oscillating", cycleLength: 2 });
+    expect(detectProgress([
+      snapshot("test", ["a"], "+const attempt = 1;"),
+      snapshot("test", ["b"], "+const attempt = 2;"),
+      snapshot("test", ["c"], "+const attempt = 3;"),
+      snapshot("test", ["a"], "+const attempt = 4;"),
+      snapshot("test", ["b"], "+const attempt = 5;"),
+      snapshot("test", ["c"], "+const attempt = 6;"),
+    ])).toEqual({ kind: "oscillating", cycleLength: 3 });
+  });
+
   it("does not call reordered identical sets an oscillation", () => {
     expect(detectProgress([
       snapshot("test", ["a", "b"]), snapshot("test", ["b", "a"]),

@@ -66,20 +66,24 @@ export function normalizePath(value: string | null): string | null {
 }
 
 export function normalizeMessage(value: string): string {
+  const stableExpectations: string[] = [];
   let normalized = sanitizeText(value)
-    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, "<id>")
-    .replace(/\bpid\s*[:=]?\s*\d+\b/gi, "pid <id>")
-    .replace(/\b((?:request|run|trace|correlation)(?:\s+id)?)\s*[:=]?\s*[a-z0-9_-]{12,}\b/gi, "$1 <id>")
-    .replace(/\b[0-9a-f]{32,}\b/gi, "<hash>")
     .replace(/\b(?:line\s*)\d+\b/gi, "line <position>")
     .replace(/\b(?:column|col)\s*\d+\b/gi, "column <position>")
     .replace(/:\d+(?::\d+)?\b/g, ":<position>")
     .replace(/\b\d+(?:\.\d+)?\s*(?:ms|milliseconds?|seconds?|secs?)\b/gi, "<duration>");
-  if (/\b(?:expected|received|actual)\b/i.test(normalized)) {
-    normalized = normalized
-      .replace(/(["']).*?\1/g, "<value>")
-      .replace(/\b-?\d+(?:\.\d+)?\b/g, "<value>");
-  }
+  normalized = normalized.replace(/^\s*Expected(?:\s+type)?\s*:.*$/gim, (expectation) => {
+    const index = stableExpectations.push(expectation.trim()) - 1;
+    return `__SENTINEL_EXPECTATION_${index}__`;
+  });
+  normalized = normalized
+    .replace(/^\s*(Received|Actual)\s*:.*$/gim, (_, label: string) => `${label}: <value>`)
+    .replace(/\bexpected\s+(.+?)\s+((?:not\s+)?to\s+(?:(?:deeply|strictly)\s+)?(?:be|equal|contain|match|throw|have|satisfy)\b)/gi, "expected <actual> $2")
+    .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, "<id>")
+    .replace(/\bpid\s*[:=]?\s*\d+\b/gi, "pid <id>")
+    .replace(/\b((?:request|run|trace|correlation)(?:\s+id)?)\s*[:=]?\s*[a-z0-9_-]{12,}\b/gi, "$1 <id>")
+    .replace(/\b[0-9a-f]{32,}\b/gi, "<hash>");
+  normalized = normalized.replace(/__SENTINEL_EXPECTATION_(\d+)__/g, (_, index: string) => stableExpectations[Number(index)] ?? "Expected: <unknown>");
   normalized = normalized.replace(/(?:[a-z]:)?[\\/](?:[^\s():]+[\\/])+[^\s():]+/gi, (path) => normalizePath(path) ?? "<path>");
   return normalizeWhitespace(normalized);
 }

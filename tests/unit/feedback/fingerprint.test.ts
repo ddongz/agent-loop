@@ -17,9 +17,11 @@ const issue = (overrides: Partial<ValidationIssue> = {}): ValidationIssue => ({
 });
 describe("fingerprint", () => {
   it("normalizes platform paths, roots, positions, duration, generated IDs and assertion values", () => {
-    const first = fingerprint(issue());
+    const first = fingerprint(issue({
+      message: "Expected: \"admin\"\nReceived: \"alice-6d6ecb98-625d-4ff2-bc35-260faf42ce8a\" after 42ms at line 18 column 7",
+    }));
     const second = fingerprint(issue({
-      message: "expected \"carol-107f8e4b-91e8-4410-a450-4a8f9ed586f0\" to equal \"dave\" after 903ms at line 99 column 2",
+      message: "Expected: \"admin\"\nReceived: \"carol-107f8e4b-91e8-4410-a450-4a8f9ed586f0\" after 903ms at line 99 column 2",
       file: "/tmp/run-9812/repo/tests/user.test.ts",
       line: 99,
       column: 2,
@@ -61,6 +63,23 @@ describe("fingerprint", () => {
     const second = fingerprint(issue({
       message: "worker pid 9876 request id run_1234567890abcdef hash bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb failed",
     }));
+
+    expect(second).toBe(first);
+  });
+
+  it("preserves stable expected values and types", () => {
+    const admin = fingerprint(issue({ message: "Expected: \"admin\"\nReceived: \"guest\"" }));
+    const owner = fingerprint(issue({ message: "Expected: \"owner\"\nReceived: \"guest\"" }));
+    const stringType = fingerprint(issue({ message: "Expected type: string\nActual: 42" }));
+    const numberType = fingerprint(issue({ message: "Expected type: number\nActual: 42" }));
+
+    expect(owner).not.toBe(admin);
+    expect(numberType).not.toBe(stringType);
+  });
+
+  it("normalizes volatile received and actual values without changing the expectation", () => {
+    const first = fingerprint(issue({ message: "Expected: \"admin\"\nReceived: \"guest-123\"\nActual: pid 1234 hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" }));
+    const second = fingerprint(issue({ message: "Expected: \"admin\"\nReceived: \"guest-999\"\nActual: pid 9876 hash bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" }));
 
     expect(second).toBe(first);
   });

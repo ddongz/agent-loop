@@ -47,6 +47,10 @@ export function detectProgress(history: readonly ProgressSnapshot[]): Progress {
 }
 
 export function canonicalFailureSet(snapshot: ProgressSnapshot): string {
+  return JSON.stringify(fingerprintSet(snapshot));
+}
+
+export function canonicalProgressSignature(snapshot: ProgressSnapshot): string {
   return JSON.stringify({
     stage: stageRank(snapshot),
     statuses: normalizedStatuses(snapshot),
@@ -58,7 +62,7 @@ export function canonicalFailureSet(snapshot: ProgressSnapshot): string {
 
 export function hasUnchangedStreak(history: readonly ProgressSnapshot[], length = 3): boolean {
   if (history.length < length) return false;
-  const tail = history.slice(-length).map(canonicalFailureSet);
+  const tail = history.slice(-length).map(canonicalProgressSignature);
   return new Set(tail).size === 1;
 }
 
