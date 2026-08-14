@@ -151,5 +151,13 @@ delivery route. Creating a real Release and running remote CI still require an
 authorized GitHub/NJU Git repository; this source tree only prepares those
 workflows.
 
+Fresh local release evidence, acceptance mappings, secret/history audit, and
+placeholder-only push/PR/tag commands are recorded in
+[`RELEASE_CHECKLIST.md`](RELEASE_CHECKLIST.md). Local gates pass, but no remote
+is configured and no remote CI, tag, or Release is claimed. The remaining
+student-only gate is a personally authored 1500–2500-Chinese-character
+`REFLECTION.md`, which is intentionally absent from the AI-authored evidence
+commit.
+
 SentinelLoop is MIT licensed. Direct dependency notices are in
 [`THIRD_PARTY_LICENSES.md`](THIRD_PARTY_LICENSES.md).

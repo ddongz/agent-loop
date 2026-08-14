@@ -176,3 +176,9 @@
 ```
 
 第二次修订后再次复核，陌生智能体返回 `PASS`：阶段、转移、Action、Validation、TaskState、模块导出、错误、事件、动态恢复和成功快照 10 项均已有可直接测试的权威定义。冷启动验证至此通过，允许进入正式实现。
+
+## 8. 实现阶段的压缩决策
+
+用户在 Task 7 后明确要求稍微压缩、简化剩余内容并保持大体功能不变。Tasks 8–10 因而采用集中评审，仍保留核心 TDD、spec compliance、code quality 和 fresh gate；Task 11–12 只记录可复现证据，不扩展产品范围。用户未提供或修改实现代码；Task 12 开始时 worktree 干净。
+
+最终交付边界保持不变：不生成学生的实质 `REFLECTION.md`，不代填远程 URL，不 push、tag、publish，也不声称未运行的远程 CI/Release 成功。

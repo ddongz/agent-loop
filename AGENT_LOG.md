@@ -170,3 +170,13 @@
 - Evidence: clean tarball install/bin smoke, 30 files / 301 tests, typecheck, lint, build, deterministic demo and dry-run pack passed.
 - Added GitHub three-platform CI, tag release artifact workflow and GitLab job exactly named `unit-test`.
 - Commit: `9f7cca4`.
+
+## 2026-08-14 — Task 12 final local evidence
+
+- Task: IMPL-12, local release gates, acceptance mapping, secret/history/artifact audit and remote handoff instructions.
+- Fresh evidence: `npm ci` installed 153 packages with 0 vulnerabilities; `npm run check` passed 30 files / 301 tests plus typecheck, lint and build; all three demos passed; final dry-run pack contained 156 allowlisted files (117.1 kB packed); clean-install package smoke passed 1/1.
+- Audit: no real secrets; the only token-shaped matches are intentional fake redaction fixtures in four test files. No tracked or historical `.env`, `.sentinelloop`, tarball or temp paths; no skipped/focused tests or suppression markers.
+- Review: all 15 SPEC acceptance criteria and six dimensions are mapped in `RELEASE_CHECKLIST.md`; correctness, security, failure handling, portability evidence, test quality and package contents have no Critical/Important local findings.
+- Human decisions: preserve functionality while compressing remaining evidence; do not generate substantive `REFLECTION.md`; do not create a remote, push, tag or publish.
+- External/student gates: remote CI/PR/Release require repository authorization; the student must personally write 1500–2500 Chinese characters in `REFLECTION.md`.
+- Commit: `docs: finalize local release evidence` (this evidence commit; resolve with `git rev-parse HEAD`).

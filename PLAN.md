@@ -574,7 +574,7 @@ git add README.md LICENSE THIRD_PARTY_LICENSES.md .npmignore .github .gitlab-ci.
 git commit -m "build: add distribution CI and documentation"
 ```
 
-### Task 12: Final evidence, security audit and release readiness
+### Task 12: Final evidence, security audit and release readiness — LOCAL EVIDENCE COMPLETE (`docs: finalize local release evidence`); STUDENT/REMOTE GATES OPEN
 
 **Files:**
 - Modify: `PLAN.md`, `TASKS.md`, `AGENT_LOG.md`, `SPEC_PROCESS.md`, `README.md`
@@ -585,24 +585,24 @@ git commit -m "build: add distribution CI and documentation"
 - Produces: verified repository ready for remote push/tag and student-authored reflection.
 - Consumes: all project outputs.
 
-- [ ] **Step 1: Run the full verification suite from a clean checkout/worktree**
+- [x] **Step 1: Run the full verification suite from a clean checkout/worktree**
 
 Run: `npm ci && npm run check && npm run demo && npm pack --dry-run`  
 Expected: every command exits 0.
 
-- [ ] **Step 2: Audit secrets and generated artifacts**
+- [x] **Step 2: Audit secrets and generated artifacts**
 
 Search working tree and Git history for known test-secret markers, common key patterns, `.env`, credential values and `.sentinelloop`; document the commands and zero-real-secret result in `RELEASE_CHECKLIST.md`.
 
-- [ ] **Step 3: Perform two-stage final review**
+- [x] **Step 3: Perform two-stage final review**
 
 First verify every SPEC acceptance criterion maps to a test/evidence item. Then review correctness, security, failure handling, portability, test quality and package contents. Fix Critical findings through separate TDD cycles.
 
-- [ ] **Step 4: Update process evidence**
+- [x] **Step 4: Update process evidence**
 
 Mark PLAN/TASKS items complete with commit hashes; finish cold-start and subagent records in `SPEC_PROCESS.md`/`AGENT_LOG.md`; record every workflow deviation and human modification.
 
-- [ ] **Step 5: Prepare remote release instructions**
+- [x] **Step 5: Prepare remote release instructions**
 
 Document exact commands for adding GitHub/NJU Git remotes, pushing branches, creating PRs and tagging `v0.1.0`. Do not fabricate remote URLs or claim CI/Release success before external execution.
 
@@ -610,12 +610,14 @@ Document exact commands for adding GitHub/NJU Git remotes, pushing branches, cre
 
 The student must personally write 1500–2500 Chinese characters in `REFLECTION.md`; AI may only polish text with disclosure. Verify presence and length but do not generate its substantive content.
 
-- [ ] **Step 7: Commit final local evidence**
+- [x] **Step 7: Commit final local evidence**
 
 ```bash
-git add PLAN.md TASKS.md AGENT_LOG.md SPEC_PROCESS.md README.md RELEASE_CHECKLIST.md REFLECTION.md
-git commit -m "docs: finalize project evidence and release checklist"
+git add PLAN.md TASKS.md AGENT_LOG.md SPEC_PROCESS.md README.md RELEASE_CHECKLIST.md
+git commit -m "docs: finalize local release evidence"
 ```
+
+Local result: Steps 1–5 and 7 are recorded in the named evidence commit. Step 6 is intentionally open and student-only. Remote CI, PR/MR, tag and Release are external gates documented in `RELEASE_CHECKLIST.md`, not claimed as completed.
 
 ## Dependency Graph and Parallelism
 
