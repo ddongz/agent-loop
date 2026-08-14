@@ -383,7 +383,7 @@ git add src/llm tests/unit/llm
 git commit -m "feat(llm): add injectable compatible client"
 ```
 
-### Task 8: End-to-end task orchestrator and red-test gate
+### Task 8: End-to-end task orchestrator and red-test gate — COMPLETE (`7e9fd4e`)
 
 **Files:**
 - Create: `src/orchestrator/task-orchestrator.ts`
@@ -394,41 +394,41 @@ git commit -m "feat(llm): add injectable compatible client"
 - Produces: `TaskOrchestrator.start(input): Promise<TaskState>`; `step(taskId): Promise<TaskState>`; `resume(taskId, approval?): Promise<TaskState>`.
 - Consumes: all interfaces from Tasks 2–7 through constructor injection.
 
-- [ ] **Step 1: Write failing phase-gate integration test**
+- [x] **Step 1: Write failing phase-gate integration test**
 
 Script an LLM that attempts production write during `GENERATE_TESTS`; assert denial, no file change and phase remains test generation. Then script test creation and invalid syntax failure; assert it cannot freeze.
 
-- [ ] **Step 2: Run red-gate test and record red**
+- [x] **Step 2: Run red-gate test and record red**
 
 Run: `npm test -- tests/integration/orchestrator/red-gate.test.ts`  
 Expected: FAIL because orchestrator does not exist.
 
-- [ ] **Step 3: Implement orchestration through FREEZE_TESTS**
+- [x] **Step 3: Implement orchestration through FREEZE_TESTS**
 
 Make every phase transition explicit, persist before/after external effects, validate red-test eligibility, and use injected confirmation IO to freeze the baseline.
 
-- [ ] **Step 4: Write failing feedback-causality success test**
+- [x] **Step 4: Write failing feedback-causality success test**
 
 Script wrong implementation → deterministic assertion fingerprint → repair only when fingerprint is in context → validators pass → final baseline verification → SUCCEEDED.
 
-- [ ] **Step 5: Implement implementation/validation loop and success gate**
+- [x] **Step 5: Implement implementation/validation loop and success gate**
 
 `finish` triggers validation only. Require all enabled validators after last write, no pending approval, allowed diff and unchanged baseline.
 
-- [ ] **Step 6: Write failing no-progress, oscillation and recovery tests**
+- [x] **Step 6: Write failing no-progress, oscillation and recovery tests**
 
 Assert three unchanged sets and a two-state cycle pause; reload a new orchestrator instance from disk and resume without losing iteration/budget/event sequence.
 
-- [ ] **Step 7: Implement deterministic pause/resume and interruption handling**
+- [x] **Step 7: Implement deterministic pause/resume and interruption handling**
 
 Persist pause reason and exact pending action; re-run repository and baseline checks before resuming.
 
-- [ ] **Step 8: Run orchestrator tests and full checks**
+- [x] **Step 8: Run orchestrator tests and full checks**
 
 Run: `npm test -- tests/integration/orchestrator && npm run check`  
 Expected: PASS.
 
-- [ ] **Step 9: Commit**
+- [x] **Step 9: Commit**
 
 ```bash
 git add src/orchestrator tests/helpers/fakes.ts tests/integration/orchestrator

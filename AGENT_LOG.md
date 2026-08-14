@@ -141,3 +141,11 @@
 - Commits: `d1df96c`, `83c4f7c`.
 - Human intervention: user authorized compressing remaining scope/review cadence while preserving core behavior.
 - Lesson: transport deadlines must cover body streaming, not only receipt of headers; format-based secret regexes need exact runtime credential values as an additional redaction source.
+
+## 2026-08-14 — Task 8 deterministic orchestrator
+
+- Task: IMPL-08, injected end-to-end TDD state loop, red-test freeze gate, validation/feedback/success gate and durable pause/resume.
+- Evidence: 3 integration files / 6 tests; 21 files / 265 full tests; typecheck, lint, build and diff-check passed.
+- Covered: production-write denial during test generation, invalid-red rejection, confirmed baseline freeze, fingerprint-causal repair, exact success gate, unchanged/cycle pause, reloaded PRECHECK recovery and durable interruption.
+- Commit: `7e9fd4e`.
+- Human intervention: none; compressed cadence retained core acceptance paths.
