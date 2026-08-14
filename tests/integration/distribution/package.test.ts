@@ -43,6 +43,20 @@ describe("npm distribution", () => {
     ]));
 
     const tarball = resolve(packDirectory, packResult[0]!.filename);
+
+    // Warm the npm cache with the exact resolution path the offline install
+    // will take: fresh CI runners start with a cold cache, and `npm ci` alone
+    // does not guarantee packument entries for every declared range. A real
+    // online install seeds the same cache keys the offline run needs.
+    const warmDirectory = await mkdtemp(join(tmpdir(), "sentinelloop-warm-"));
+    temporaryDirectories.push(warmDirectory);
+    await writeFile(join(warmDirectory, "package.json"), '{"private":true}\n', "utf8");
+    const warmed = runNpm(
+      ["install", "--ignore-scripts", "--no-audit", "--no-fund", tarball],
+      warmDirectory,
+    );
+    expect(warmed.status, warmed.stderr).toBe(0);
+
     await writeFile(join(installDirectory, "package.json"), '{"private":true}\n', "utf8");
     const installed = runNpm(
       ["install", "--ignore-scripts", "--offline", "--no-audit", "--no-fund", tarball],

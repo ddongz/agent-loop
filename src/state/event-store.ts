@@ -11,8 +11,10 @@ export type NewTaskEvent = Omit<TaskEvent, "sequence">;
 
 /**
  * Append-only events under the v1 single-Agent/single-writer prerequisite.
- * The final ancestry check and no-follow open reduce link attacks but cannot
- * make path traversal atomic against a malicious concurrent parent swap.
+ * Ancestry is rechecked beside each append and the event file boundary is
+ * link-checked before a no-follow open, since O_NOFOLLOW is ignored on
+ * Windows. Checks cannot make path traversal atomic against a malicious
+ * concurrent parent swap.
  */
 export class EventStore {
   constructor(private readonly repositoryRoot: string) {}
@@ -30,6 +32,7 @@ export class EventStore {
     try {
       await mkdir(directory, { recursive: true });
       await this.assertSafeStoragePath(taskId);
+      await assertNotSymbolicLink(this.eventsPath(taskId), taskId);
       handle = await open(this.eventsPath(taskId), appendNoFollowFlags());
       await handle.writeFile(`${JSON.stringify(event)}\n`, "utf8");
       await handle.sync();
@@ -142,6 +145,18 @@ export class EventStore {
 
 function appendNoFollowFlags(): number {
   return constants.O_WRONLY | constants.O_CREAT | constants.O_APPEND | constants.O_NOFOLLOW;
+}
+
+async function assertNotSymbolicLink(path: string, taskId: string): Promise<void> {
+  try {
+    if ((await lstat(path)).isSymbolicLink()) {
+      throw corruptEventError("Task event log cannot be a symbolic link.", taskId);
+    }
+  } catch (error) {
+    if (isNodeError(error) && error.code === "ENOENT") return;
+    if (error instanceof SentinelError) throw error;
+    throw corruptEventError("Task event file boundary cannot be verified.", taskId, error);
+  }
 }
 
 function parseEvent(value: unknown, taskId: string): TaskEvent {
