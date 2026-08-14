@@ -47,6 +47,20 @@ describe("validation tool", () => {
     expect(Buffer.byteLength(result.stdoutSummary)).toBe(65_535);
   });
 
+  it("re-caps replacement-decoded invalid bytes to 64 KiB of encoded UTF-8", async () => {
+    const root = await createTempRepository();
+    const script = join(root, "invalid-byte-output.mjs");
+    await writeFile(script, "process.stdout.write(Buffer.alloc(65_536, 0xff));\n", "utf8");
+    const tool = validationTool(root, process.execPath, [script]);
+
+    const observation = await execute(tool, "invalid-byte-output");
+    const [result] = JSON.parse(observation.output) as Array<{ stdoutSummary: string; stdoutTruncated: boolean }>;
+
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stdoutSummary).toContain("�");
+    expect(Buffer.byteLength(result.stdoutSummary, "utf8")).toBeLessThanOrEqual(65_536);
+  });
+
   it("kills an aborted validation and returns a timeout observation", async () => {
     const root = await createTempRepository();
     const script = join(root, "wait.mjs");

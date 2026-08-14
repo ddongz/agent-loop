@@ -152,11 +152,16 @@ class BoundedStream {
 
   text(): string {
     const content = Buffer.concat(this.#chunks, this.#length);
+    let decoded: string;
     try {
-      return decodeUtf8Prefix(content, this.truncated);
+      decoded = decodeUtf8Prefix(content, this.truncated);
     } catch {
-      return new TextDecoder("utf-8").decode(content);
+      decoded = new TextDecoder("utf-8").decode(content);
     }
+    const encoded = Buffer.from(decoded, "utf8");
+    if (encoded.byteLength <= this.#limit) return decoded;
+    this.truncated = true;
+    return decodeUtf8Prefix(encoded.subarray(0, this.#limit), true);
   }
 }
 

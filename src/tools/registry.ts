@@ -68,7 +68,12 @@ export class ToolRegistry {
       if (context.approvals === undefined) {
         return timer.fail(new SentinelError({ code: "INTERNAL", message: "Policy granted an approval without an approval manager." }));
       }
-      const consumption = context.approvals.consume(action, context.baselineVersion);
+      let consumption;
+      try {
+        consumption = context.approvals.consume(action, context.baselineVersion);
+      } catch (error) {
+        return timer.fail(error);
+      }
       if (!consumption.ok) {
         return policyObservation(timer, "denied", "POLICY_DENIED", consumption.reasonCode);
       }

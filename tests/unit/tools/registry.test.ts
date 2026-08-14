@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 
 import { ActionSchema, ObservationSchema, type Action, type Observation } from "../../../src/domain/action.js";
-import type { JsonValue } from "../../../src/domain/error.js";
+import { SentinelError, type JsonValue } from "../../../src/domain/error.js";
 import { ApprovalManager } from "../../../src/governance/approval.js";
 import { PolicyEngine } from "../../../src/governance/policy-engine.js";
 import { ToolRegistry } from "../../../src/tools/registry.js";
@@ -194,6 +194,34 @@ describe("ToolRegistry", () => {
     expect(execute).not.toHaveBeenCalled();
     expect(observation).toMatchObject({ status: "denied", error: { code: "POLICY_DENIED" } });
     expect(approved.approvals.consume(approved.action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
+  });
+
+  it("normalizes a throwing approval consumption and never calls the tool", async () => {
+    const approvals = new ApprovalManager();
+    vi.spyOn(approvals, "consume").mockImplementation(() => {
+      throw new SentinelError({ code: "PERSISTENCE_FAILED", message: "secret approval backend failed" });
+    });
+    const execute = vi.fn<() => Promise<Observation>>();
+    const policy = { evaluate: vi.fn(async () => ({ kind: "ALLOW", reasonCode: "ONE_TIME_APPROVAL_GRANTED" } as const)) };
+    const redact = (value: JsonValue): JsonValue => typeof value === "string" ? value.replaceAll("secret", "[REDACTED]") : value;
+    const registry = new ToolRegistry(policy, [{ type: "create_file", schema: ActionSchema, constraints: [], execute }], redact);
+    const input = action({ type: "create_file", id: "consume-throws", path: "tests/failure.test.ts", content: "content\n" });
+
+    const observation = await registry.dispatch({
+      workspaceRoot: process.cwd(),
+      phase: "IMPLEMENT",
+      protectedTests: ["tests/failure.test.ts"],
+      baselineVersion: 2,
+      approvals,
+    }, input);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(ObservationSchema.parse(observation)).toMatchObject({
+      actionId: "consume-throws",
+      tool: "create_file",
+      status: "failed",
+      error: { code: "PERSISTENCE_FAILED", message: "[REDACTED] approval backend failed" },
+    });
   });
 });
 
