@@ -1,0 +1,3 @@
+[31m FAIL [39m tests/user-service.test.ts > user service > returns user by email 42ms
+AssertionError: expected { id: "9f7e1a1e-2b9a-4ac6-9f53-62aa5b938d31", email: "wrong@example.test" } to deeply equal { id: "expected", email: "ada@example.test" }
+ ❯ tests/user-service.test.ts:18:11

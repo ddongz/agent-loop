@@ -1,0 +1,4 @@
+vite v7.0.0 building for production...
+error during build:
+Error: Cannot find module 'missing-build-plugin'
+    at loadConfigFromFile (C:\Users\runner\AppData\Local\Temp\vite-1937\config.js:22:9)

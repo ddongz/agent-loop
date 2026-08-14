@@ -1,0 +1,1 @@
+[{"filePath":"C:\\agent\\repo\\src\\user.ts","messages":[{"ruleId":"@typescript-eslint/no-unused-vars","severity":2,"message":"'token' is assigned a value but never used.","line":7,"column":9},{"ruleId":"eqeqeq","severity":1,"message":"Expected '===' and instead saw '=='.","line":11,"column":5}],"errorCount":1,"warningCount":1}]

@@ -1,0 +1,9 @@
+FAIL tests/math.test.ts
+  ● math service › adds values
+
+    expect(received).toBe(expected) // Object.is equality
+
+    Expected: 4
+    Received: 5
+
+      at Object.<anonymous> (C:\agent\repo\tests\math.test.ts:9:17)

@@ -1,0 +1,2 @@
+src/user.ts(14,7): error TS2322: Type 'string' is not assignable to type 'number'.
+src/user.ts(20,3): error TS2339: Property 'email' does not exist on type 'Account'.
