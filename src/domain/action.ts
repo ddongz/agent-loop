@@ -19,9 +19,9 @@ const ApplyPatchSchema = ActionBaseSchema.extend({
 })
   .strict()
   .superRefine(({ path, patch }, context) => {
-    const headerMatches = [...patch.matchAll(/^(---|\+\+\+)\s+(?:a\/|b\/)?([^\t\r\n ]+)/gm)];
-    const headers = headerMatches.map((match) => match[2]);
-    if (headerMatches.length !== 2 || headers[0] !== path || headers[1] !== path || !patch.includes(`--- a/${path}`) || !patch.includes(`+++ b/${path}`)) {
+    const headers = patch.replaceAll("\r\n", "\n").split("\n")
+      .filter((line) => line.startsWith("--- ") || line.startsWith("+++ "));
+    if (headers.length !== 2 || headers[0] !== `--- a/${path}` || headers[1] !== `+++ b/${path}`) {
       context.addIssue({ code: "custom", message: "Patch must contain exactly one matching unified diff file header pair." });
     }
   });
