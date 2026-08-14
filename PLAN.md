@@ -238,7 +238,7 @@ git add src/governance tests/unit/governance
 git commit -m "feat(governance): confine actions and freeze tests"
 ```
 
-### Task 5: Structured tool registry and safe file tools
+### Task 5: Structured tool registry and safe file tools — COMPLETE (`64ef79b`, `3912690`, `c52401b`)
 
 **Files:**
 - Create: `src/tools/types.ts`, `src/tools/registry.ts`, `src/tools/file-tools.ts`, `src/tools/validation-tool.ts`
@@ -248,33 +248,33 @@ git commit -m "feat(governance): confine actions and freeze tests"
 - Produces: `Tool<I>.execute(input, signal): Promise<Observation>`; `ToolRegistry.dispatch(context, action): Promise<Observation>`.
 - Consumes: action schemas and `PolicyEngine`; `ValidationPlan` from Task 3.
 
-- [ ] **Step 1: Write failing pre-dispatch policy test**
+- [x] **Step 1: Write failing pre-dispatch policy test**
 
 Use a spy tool and a denied action; assert `execute` was never called and the observation code is `POLICY_DENIED`.
 
-- [ ] **Step 2: Write failing atomic patch, output limit and timeout tests**
+- [x] **Step 2: Write failing atomic patch, output limit and timeout tests**
 
 Assert a conflicting patch leaves the file unchanged; output over 64 KiB is truncated with metadata; an expired AbortSignal kills validation and returns `TIMEOUT`.
 
-- [ ] **Step 3: Run tool tests to verify red**
+- [x] **Step 3: Run tool tests to verify red**
 
 Run: `npm test -- tests/unit/tools tests/integration/tools`  
 Expected: FAIL with missing registry/tools.
 
-- [ ] **Step 4: Implement registry and read/list/search/create/apply-patch tools**
+- [x] **Step 4: Implement registry and read/list/search/create/apply-patch tools**
 
 Every tool has a Zod input schema. Use Node APIs for file operations and a small internal unified-diff applicator limited to exact-context hunks; do not invoke shell editors.
 
-- [ ] **Step 5: Implement validation process runner**
+- [x] **Step 5: Implement validation process runner**
 
 Use `spawn` with `shell: false`, package-manager executable plus argument array, bounded buffers, timeout/abort, and a process-tree termination strategy per platform.
 
-- [ ] **Step 6: Run focused tests and static checks**
+- [x] **Step 6: Run focused tests and static checks**
 
 Run: `npm test -- tests/unit/tools tests/integration/tools && npm run typecheck && npm run lint`  
 Expected: PASS.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add src/tools tests/unit/tools tests/integration/tools

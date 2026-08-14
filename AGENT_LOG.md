@@ -110,3 +110,14 @@
 - Commits: `063786a`, `3f7341d`.
 - Human intervention: none.
 - Lesson: approval metadata is not a baseline update; an approved mutation must recapture content hashes and advance a restorable versioned artifact.
+
+## 2026-08-14 — Task 5 governed structured tools
+
+- Task: IMPL-05, registry, safe file/list/search/patch tools and bounded validation runner.
+- Initial evidence: 30 focused and 150 full tests passed; review found 4 Important/3 Minor correctness issues.
+- Fix round 1: two-phase approval consumption, original-coordinate patching, EOF/mixed-ending preservation, external signal classification, unknown identity, UTF-8 safe truncation and glob semantics; 166 full tests passed.
+- Fix round 2: final encoded-byte cap for invalid UTF-8 and approval-consume exception normalization; 168 full tests passed.
+- Final review: targeted 23/23 and typecheck passed; no new Critical/Important; Spec PASS and Quality PASS.
+- Commits: `64ef79b`, `3912690`, `c52401b`.
+- Human intervention: none.
+- Lesson: an approval is a transactional capability and must only be consumed at the last safe point before a real dispatch attempt; diff correctness depends on coordinates and EOF semantics, not just matching context text.
