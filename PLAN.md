@@ -332,7 +332,7 @@ git add src/feedback tests/fixtures/validation tests/unit/feedback
 git commit -m "feat(feedback): classify failures and detect progress"
 ```
 
-### Task 7: LLM abstraction, scripted mock and context builder
+### Task 7: LLM abstraction, scripted mock and context builder — COMPLETE (`d1df96c`, `83c4f7c`)
 
 **Files:**
 - Create: `src/llm/types.ts`, `src/llm/scripted-client.ts`, `src/llm/openai-compatible.ts`, `src/llm/context-builder.ts`
@@ -342,7 +342,7 @@ git commit -m "feat(feedback): classify failures and detect progress"
 - Produces: `LLMClient.complete(request): Promise<CompletionResult>`; `ScriptedLLMClient`; `OpenAICompatibleClient`; `buildContext(task, events, feedback): CompletionRequest`.
 - Consumes: `Action`, `Feedback`, task/events and available tool schemas.
 
-- [ ] **Step 1: Write failing scripted feedback-causality test**
+- [x] **Step 1: Write failing scripted feedback-causality test**
 
 ```ts
 const client = new ScriptedLLMClient([{ when: { feedbackFingerprint: "fp-1" }, action: repairAction }]);
@@ -350,33 +350,33 @@ await expect(client.complete(requestWithoutFp)).rejects.toMatchObject({ code: "S
 expect((await client.complete(requestWithFp)).action).toEqual(repairAction);
 ```
 
-- [ ] **Step 2: Write failing context minimization/redaction tests**
+- [x] **Step 2: Write failing context minimization/redaction tests**
 
 Assert context contains original requirement, current phase, available tools, latest feedback and budget, but excludes old unrelated events and a seeded secret.
 
-- [ ] **Step 3: Run LLM tests and record red**
+- [x] **Step 3: Run LLM tests and record red**
 
 Run: `npm test -- tests/unit/llm`  
 Expected: FAIL with missing modules.
 
-- [ ] **Step 4: Implement interfaces, scripted matcher and context builder**
+- [x] **Step 4: Implement interfaces, scripted matcher and context builder**
 
 The scripted client must branch on request content, not merely dequeue responses. Context builder caps sections and emits no full unbounded logs.
 
-- [ ] **Step 5: Implement OpenAI-compatible single-call adapter**
+- [x] **Step 5: Implement OpenAI-compatible single-call adapter**
 
 Configure `baseURL`, model, API key and approved extra headers. Call only Chat Completions/tool calling. Map auth, rate limit, timeout, unavailable and protocol errors to stable `SentinelError` codes.
 
-- [ ] **Step 6: Test adapter using a fake fetch transport**
+- [x] **Step 6: Test adapter using a fake fetch transport**
 
 Assert correct request schema and that malformed/multiple unsupported tool calls are rejected without reaching the dispatcher.
 
-- [ ] **Step 7: Run LLM suite and checks**
+- [x] **Step 7: Run LLM suite and checks**
 
 Run: `npm test -- tests/unit/llm && npm run typecheck && npm run lint`  
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/llm tests/unit/llm

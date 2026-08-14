@@ -132,3 +132,12 @@
 - Commits: `41f232b`, `1dd40e4`, `467987e`.
 - Human intervention: none.
 - Lesson: oscillation and unchanged detection need different signatures; success gates must validate an exact authoritative validator set, never infer completeness from the results presented.
+
+## 2026-08-14 — Task 7 LLM abstraction and bounded context
+
+- Task: IMPL-07, semantic scripted client, bounded/redacted context builder and fake-transport OpenAI-compatible Chat Completions adapter.
+- TDD: all three suites began with missing-module RED. Final focused: 28 tests; full suite: 259 tests.
+- Controller debugging found an infinite-stream hang, an ignored-AbortSignal deadline gap and missing Scripted runtime request validation. Review then found stalled body reads and opaque credential redaction gaps. All were fixed with incremental bounded reads, full lifecycle cancellation races and injected exact sensitive values.
+- Commits: `d1df96c`, `83c4f7c`.
+- Human intervention: user authorized compressing remaining scope/review cadence while preserving core behavior.
+- Lesson: transport deadlines must cover body streaming, not only receipt of headers; format-based secret regexes need exact runtime credential values as an additional redaction source.
