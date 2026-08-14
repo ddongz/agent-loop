@@ -163,3 +163,10 @@
 - Task 10 proves governance, fingerprint-causal repair and third-unchanged pause. The feedback demo was upgraded to a real temporary Git/TypeScript repository with real precheck and validation subprocesses; only the LLM remains scripted.
 - Evidence after fixes: 29 files / 300 tests; deterministic demo output identical across two runs.
 - Commits: `81396c5`, `a7b6cf4`, `6f1fd91`, `dbf85af`.
+
+## 2026-08-14 — Task 11 distribution readiness
+
+- Package smoke began RED because 128 unintended files were included. Package allowlisting reduced contents to built dist/source maps and required legal/user docs.
+- Evidence: clean tarball install/bin smoke, 30 files / 301 tests, typecheck, lint, build, deterministic demo and dry-run pack passed.
+- Added GitHub three-platform CI, tag release artifact workflow and GitLab job exactly named `unit-test`.
+- Commit: `9f7cca4`.

@@ -529,7 +529,7 @@ git add scripts/mechanism-demo.ts tests/demos package.json
 git commit -m "test(demo): prove governance feedback and stall mechanisms"
 ```
 
-### Task 11: Distribution, CI and user documentation
+### Task 11: Distribution, CI and user documentation — COMPLETE (`9f7cca4`)
 
 **Files:**
 - Create: `README.md`, `LICENSE`, `THIRD_PARTY_LICENSES.md`, `.npmignore`
@@ -541,33 +541,33 @@ git commit -m "test(demo): prove governance feedback and stall mechanisms"
 - Produces: installable npm tarball, GitHub Release workflow, GitLab `unit-test` job and complete user documentation.
 - Consumes: final CLI and scripts.
 
-- [ ] **Step 1: Write failing package smoke test**
+- [x] **Step 1: Write failing package smoke test**
 
 Build and `npm pack --json`, install the tarball in a clean temporary directory with scripts disabled, run the packaged bin `--help`, and assert no source/tests/secrets are included unexpectedly.
 
-- [ ] **Step 2: Run package test and capture red**
+- [x] **Step 2: Run package test and capture red**
 
 Run: `npm test -- tests/integration/distribution/package.test.ts`  
 Expected: FAIL before package files/build output are configured.
 
-- [ ] **Step 3: Configure build and npm contents**
+- [x] **Step 3: Configure build and npm contents**
 
 Publish only `dist`, README, LICENSE and package metadata; include source maps but no `.sentinelloop`, `.env`, test fixtures or assignment-only files.
 
-- [ ] **Step 4: Add CI definitions**
+- [x] **Step 4: Add CI definitions**
 
 GitHub CI matrix: Windows/macOS/Linux with Node 22.12+, `npm ci`, `npm run check`, `npm run demo`, `npm pack`. GitLab must contain a job exactly named `unit-test`. Release workflow triggers on `v*` tags, validates, packs and attaches the `.tgz` to GitHub Release; npm publish remains manual unless a token is explicitly configured.
 
-- [ ] **Step 5: Write README and license documentation**
+- [x] **Step 5: Write README and license documentation**
 
 Include overview, architecture, installation, auth lifecycle, run/resume/status/report, demo, distribution, directory layout, security boundary, supported platforms, known limitations, provider compatibility, troubleshooting and teaching-assistant WebUI clarification. List third-party licenses.
 
-- [ ] **Step 6: Run package and all checks**
+- [x] **Step 6: Run package and all checks**
 
 Run: `npm run check && npm run demo && npm test -- tests/integration/distribution/package.test.ts && npm pack --dry-run`  
 Expected: all PASS; tarball file list is intentional.
 
-- [ ] **Step 7: Commit**
+- [x] **Step 7: Commit**
 
 ```bash
 git add README.md LICENSE THIRD_PARTY_LICENSES.md .npmignore .github .gitlab-ci.yml package.json tests/integration/distribution TASKS.md AGENT_LOG.md
