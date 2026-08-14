@@ -281,7 +281,7 @@ git add src/tools tests/unit/tools tests/integration/tools
 git commit -m "feat(tools): add governed structured tool dispatch"
 ```
 
-### Task 6: Validation parsers and deterministic feedback engine
+### Task 6: Validation parsers and deterministic feedback engine — COMPLETE (`41f232b`, `1dd40e4`, `467987e`)
 
 **Files:**
 - Create: `src/feedback/parsers.ts`, `src/feedback/fingerprint.ts`, `src/feedback/progress.ts`, `src/feedback/feedback-engine.ts`
@@ -292,40 +292,40 @@ git commit -m "feat(tools): add governed structured tool dispatch"
 - Produces: `parseValidation(raw): ValidationResult`; `fingerprint(issue): string`; `detectProgress(history): Progress`; `FeedbackEngine.evaluate(results, history, diff): FeedbackDecision`.
 - Consumes: validation domain types from Task 1.
 
-- [ ] **Step 1: Add realistic fixed output fixtures and failing parser tests**
+- [x] **Step 1: Add realistic fixed output fixtures and failing parser tests**
 
 ```ts
 expect(parseValidation(vitestFixture).issues[0]).toMatchObject({ category: "TEST_ASSERTION", testName: "returns user by email" });
 expect(parseValidation(tscFixture).issues[0]).toMatchObject({ category: "TYPE_ERROR", rule: "TS2322" });
 ```
 
-- [ ] **Step 2: Run parser tests and record red**
+- [x] **Step 2: Run parser tests and record red**
 
 Run: `npm test -- tests/unit/feedback/parsers.test.ts`  
 Expected: FAIL because parser module does not exist.
 
-- [ ] **Step 3: Implement ordered parsers with UNKNOWN fallback**
+- [x] **Step 3: Implement ordered parsers with UNKNOWN fallback**
 
 Prefer structured reporter JSON when available; otherwise parse stable Vitest/Jest/tsc/ESLint patterns. Preserve only redacted, bounded summaries on fallback.
 
-- [ ] **Step 4: Write failing fingerprint normalization tests**
+- [x] **Step 4: Write failing fingerprint normalization tests**
 
 Two issues differing only in line number, duration, temp root and actual value must share a fingerprint; different test names or TS codes must not.
 
-- [ ] **Step 5: Implement fingerprinting and progress comparison**
+- [x] **Step 5: Implement fingerprinting and progress comparison**
 
 Return `improved`, `unchanged`, `regressed`, or `oscillating`; stage advancement outranks raw issue count. Detect length-2 and length-3 cycles.
 
-- [ ] **Step 6: Write and satisfy feedback/stall tests**
+- [x] **Step 6: Write and satisfy feedback/stall tests**
 
 Assert compact feedback includes resolved/new/repeated fingerprints and budgets; assert three unchanged sets yield `PAUSE_NO_PROGRESS`, while all enabled validators passing yields `REQUEST_SUCCESS_CHECK`.
 
-- [ ] **Step 7: Run feedback suite and full static checks**
+- [x] **Step 7: Run feedback suite and full static checks**
 
 Run: `npm test -- tests/unit/feedback && npm run typecheck && npm run lint`  
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/feedback tests/fixtures/validation tests/unit/feedback

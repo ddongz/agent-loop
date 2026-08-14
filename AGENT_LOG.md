@@ -121,3 +121,14 @@
 - Commits: `64ef79b`, `3912690`, `c52401b`.
 - Human intervention: none.
 - Lesson: an approval is a transactional capability and must only be consumed at the last safe point before a real dispatch attempt; diff correctness depends on coordinates and EOF semantics, not just matching context text.
+
+## 2026-08-14 — Task 6 deterministic feedback loop
+
+- Task: IMPL-06, validation parsers, stable fingerprints, multi-signal progress and deterministic feedback/stop decisions.
+- Initial implementation: 33 focused and 201 full tests; review found parser completeness, validator completeness, fingerprint and progress flaws.
+- Fix round 1: 20/57 targeted REDs; exact enabled-validator success, complete parser classes/TIMEOUT, bounded issues, stable temp paths and full progress signatures; 227 full tests.
+- Fix round 2: separated failure-set cycle signatures from full unchanged signatures and preserved stable expected semantics while normalizing volatile actual values; 231 full tests.
+- Final review: targeted 20/20 and typecheck passed; no Critical/Important; Spec PASS and Quality PASS.
+- Commits: `41f232b`, `1dd40e4`, `467987e`.
+- Human intervention: none.
+- Lesson: oscillation and unchanged detection need different signatures; success gates must validate an exact authoritative validator set, never infer completeness from the results presented.
