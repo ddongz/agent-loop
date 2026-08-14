@@ -41,7 +41,10 @@ export async function precheckRepository(
 
   const status = await runGit(resolvedRoot, ["status", "--porcelain=v1", "--untracked-files=all"]);
   if (!options.allowDirty && status.length > 0) {
-    throw new SentinelError({ code: "DIRTY_WORKTREE", message: "Repository worktree must be clean before starting a task." });
+    throw new SentinelError({
+      code: "DIRTY_WORKTREE",
+      message: "Repository worktree must be clean before starting a task. Commit or stash the changes in the target repository, then retry.",
+    });
   }
 
   await requirePath(join(resolvedRoot, "package.json"), "PACKAGE_JSON_MISSING", "Repository root must contain package.json.");
