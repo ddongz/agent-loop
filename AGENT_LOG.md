@@ -149,3 +149,10 @@
 - Covered: production-write denial during test generation, invalid-red rejection, confirmed baseline freeze, fingerprint-causal repair, exact success gate, unchanged/cycle pause, reloaded PRECHECK recovery and durable interruption.
 - Commit: `7e9fd4e`.
 - Human intervention: none; compressed cadence retained core acceptance paths.
+
+## 2026-08-14 — Task 9 CLI, config, credentials and reports
+
+- Task: IMPL-09, strict non-secret config, system credential adapters, injected CLI and deterministic redacted reports.
+- Evidence: four missing-module RED suites; 25 focused and 290 full tests passed; typecheck, lint, build and diff-check passed.
+- Scope remained CLI-only with no plaintext credential fallback and no WebUI.
+- Commit: `8f940a3`.

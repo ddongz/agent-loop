@@ -435,7 +435,7 @@ git add src/orchestrator tests/helpers/fakes.ts tests/integration/orchestrator
 git commit -m "feat(orchestrator): enforce deterministic TDD loop"
 ```
 
-### Task 9: Configuration, OS credentials, CLI and reports
+### Task 9: Configuration, OS credentials, CLI and reports — COMPLETE (`8f940a3`)
 
 **Files:**
 - Create: `src/config/schema.ts`, `src/config/config-store.ts`
@@ -448,37 +448,37 @@ git commit -m "feat(orchestrator): enforce deterministic TDD loop"
 - Produces: `CredentialStore.set/get/delete/metadata`; `ConfigStore`; `createProgram(deps)`; `generateReport(task, events): string`.
 - Consumes: orchestrator APIs from Task 8.
 
-- [ ] **Step 1: Write failing credential and redaction tests**
+- [x] **Step 1: Write failing credential and redaction tests**
 
 Assert `auth status` reports configured metadata without any key fragment; seed a secret into nested errors/events and assert report/log redaction.
 
-- [ ] **Step 2: Write failing CLI contract tests**
+- [x] **Step 2: Write failing CLI contract tests**
 
 Exercise `auth set/status/clear`, `run`, `resume`, `status`, `report`, exit codes and empty requirement using injected IO, memory credentials and fake orchestrator.
 
-- [ ] **Step 3: Run focused tests and record red**
+- [x] **Step 3: Run focused tests and record red**
 
 Run: `npm test -- tests/unit/config tests/unit/credentials tests/unit/reporting tests/integration/cli`  
 Expected: FAIL with missing modules.
 
-- [ ] **Step 4: Implement config and credential interfaces**
+- [x] **Step 4: Implement config and credential interfaces**
 
 User config stores only non-secret base URL, model, allowed header names and policies. Platform adapter invokes PowerShell PasswordVault on Windows, `security` on macOS, and `secret-tool` on Linux with arguments/stdin and `shell: false`; backend absence is a hard, actionable error.
 
-- [ ] **Step 5: Implement CLI and hidden-input IO**
+- [x] **Step 5: Implement CLI and hidden-input IO**
 
 Expose the specified subcommands. Never accept API key as a command option. Map success, pause, user/config, environment and internal errors to documented stable exit codes.
 
-- [ ] **Step 6: Implement deterministic Markdown report**
+- [x] **Step 6: Implement deterministic Markdown report**
 
 Include original requirement, baseline hashes, phase history, actions, policy decisions, feedback summaries, approvals, budget and final validation; redact before serialization.
 
-- [ ] **Step 7: Run CLI/report suite and full checks**
+- [x] **Step 7: Run CLI/report suite and full checks**
 
 Run: `npm test -- tests/unit/config tests/unit/credentials tests/unit/reporting tests/integration/cli && npm run check`  
 Expected: PASS.
 
-- [ ] **Step 8: Commit**
+- [x] **Step 8: Commit**
 
 ```bash
 git add src/config src/credentials src/reporting src/cli src/index.ts tests/unit/config tests/unit/credentials tests/unit/reporting tests/integration/cli
