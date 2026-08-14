@@ -13,13 +13,18 @@ export interface Tool<I extends Action = Action> {
 
 export type Redactor = (value: JsonValue) => JsonValue;
 
+interface ObservationSubject {
+  id: string;
+  type: string;
+}
+
 export class ObservationTimer {
-  readonly #action: Action;
+  readonly #action: ObservationSubject;
   readonly #startedAt = new Date();
   readonly #started = performance.now();
   readonly #redact: Redactor;
 
-  constructor(action: Action, redact: Redactor = identityRedactor) {
+  constructor(action: ObservationSubject, redact: Redactor = identityRedactor) {
     this.#action = action;
     this.#redact = redact;
   }
@@ -60,4 +65,17 @@ export function normalizeError(error: unknown, fallbackCode: SentinelErrorCode =
 
 export function identityRedactor(value: JsonValue): JsonValue {
   return value;
+}
+
+export function decodeUtf8Prefix(content: Buffer, mayEndMidCharacter: boolean): string {
+  const decoder = new TextDecoder("utf-8", { fatal: true });
+  const maximumTrim = mayEndMidCharacter ? Math.min(3, content.byteLength) : 0;
+  for (let trim = 0; trim <= maximumTrim; trim += 1) {
+    try {
+      return decoder.decode(content.subarray(0, content.byteLength - trim));
+    } catch {
+      // Only an incomplete final UTF-8 sequence may be removed from bounded output.
+    }
+  }
+  throw new SentinelError({ code: "INVALID_INPUT", message: "Bounded content is not valid UTF-8 text." });
 }

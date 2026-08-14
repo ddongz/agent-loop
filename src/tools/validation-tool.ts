@@ -4,7 +4,7 @@ import { ActionSchema, type Action, type Observation } from "../domain/action.js
 import { SentinelError } from "../domain/error.js";
 import type { ValidationResult } from "../domain/validation.js";
 import type { ValidationCommand, ValidationPlan } from "../repository/validation-discovery.js";
-import { identityRedactor, ObservationTimer, type Redactor, type Tool } from "./types.js";
+import { decodeUtf8Prefix, identityRedactor, ObservationTimer, type Redactor, type Tool } from "./types.js";
 
 const streamLimit = 65_536;
 
@@ -46,6 +46,7 @@ export async function runValidationCommand(
   workspaceRoot: string,
   command: ValidationCommand,
   signal: AbortSignal,
+  spawnProcess: typeof spawn = spawn,
 ): Promise<ValidationResult> {
   if (!command.enabled) throw invalidInput(`Validator is disabled: ${command.validator}`);
   if (signal.aborted) throw timeoutError("Validation was aborted before it started.");
@@ -54,10 +55,10 @@ export async function runValidationCommand(
   const stdout = new BoundedStream(streamLimit);
   const stderr = new BoundedStream(streamLimit);
 
-  const result = await new Promise<{ exitCode: number | null }>((resolve, reject) => {
+  const result = await new Promise<{ exitCode: number | null; closeSignal: NodeJS.Signals | null }>((resolve, reject) => {
     let terminationReason: "timeout" | "abort" | null = null;
     let settled = false;
-    const child = spawn(platformExecutable(command.executable), [...command.args], {
+    const child = spawnProcess(platformExecutable(command.executable), [...command.args], {
       cwd: workspaceRoot,
       shell: false,
       windowsHide: true,
@@ -87,21 +88,23 @@ export async function runValidationCommand(
       cleanup();
       reject(new SentinelError({ code: "VALIDATION_INFRASTRUCTURE", message: "Validation process could not be started.", cause: error }));
     });
-    child.once("close", (exitCode) => {
+    child.once("close", (exitCode, closeSignal) => {
       if (settled) return;
       settled = true;
       cleanup();
       if (terminationReason !== null) {
         reject(timeoutError(terminationReason === "timeout" ? "Validation exceeded its time limit." : "Validation was aborted."));
       } else {
-        resolve({ exitCode });
+        resolve({ exitCode, closeSignal });
       }
     });
   });
 
   return {
     validator: command.validator,
-    status: result.exitCode === 0 ? "passed" : "failed",
+    status: result.closeSignal !== null || result.exitCode === null
+      ? "infrastructure_error"
+      : result.exitCode === 0 ? "passed" : "failed",
     exitCode: result.exitCode,
     command: { executable: command.executable, args: [...command.args] },
     startedAt: startedAt.toISOString(),
@@ -148,7 +151,12 @@ class BoundedStream {
   }
 
   text(): string {
-    return new TextDecoder("utf-8").decode(Buffer.concat(this.#chunks, this.#length));
+    const content = Buffer.concat(this.#chunks, this.#length);
+    try {
+      return decodeUtf8Prefix(content, this.truncated);
+    } catch {
+      return new TextDecoder("utf-8").decode(content);
+    }
   }
 }
 

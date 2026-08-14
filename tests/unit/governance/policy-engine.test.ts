@@ -36,6 +36,27 @@ function clock(...timestamps: string[]): () => string {
 }
 
 describe("PolicyEngine", () => {
+  it("checks an approved action without consuming its one-time grant", async () => {
+    const root = await repository();
+    const approvals = new ApprovalManager(clock(
+      "2026-08-14T12:00:00.000Z",
+      "2026-08-14T12:00:01.000Z",
+      "2026-08-14T12:00:02.000Z",
+    ));
+    const action = createFile("pure-check", "tests/feature.test.ts", "approved change\n");
+    approvals.request(action, 2);
+    approvals.approve(action.id);
+
+    await expect(new PolicyEngine().evaluate({
+      workspaceRoot: root,
+      phase: "IMPLEMENT",
+      protectedTests: ["tests/feature.test.ts"],
+      baselineVersion: 2,
+      approvals,
+    }, action)).resolves.toEqual({ kind: "ALLOW", reasonCode: "ONE_TIME_APPROVAL_GRANTED" });
+    expect(approvals.consume(action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
+  });
+
   it("denies production writes while tests are being generated", async () => {
     const root = await repository();
     const policy = new PolicyEngine();
@@ -134,7 +155,7 @@ describe("PolicyEngine", () => {
     ).resolves.toEqual({ kind: "REQUIRE_APPROVAL", reasonCode: "PROTECTED_TEST_MUTATION" });
   });
 
-  it("consumes an exact approved action once and denies replay", async () => {
+  it("purely rechecks an exact approved action without turning it into a replay", async () => {
     const root = await repository();
     const approvals = new ApprovalManager(clock(
       "2026-08-14T12:00:00.000Z",
@@ -155,12 +176,13 @@ describe("PolicyEngine", () => {
 
     await expect(policy.evaluate(context, action)).resolves.toEqual({
       kind: "ALLOW",
-      reasonCode: "ONE_TIME_APPROVAL_CONSUMED",
+      reasonCode: "ONE_TIME_APPROVAL_GRANTED",
     });
     await expect(policy.evaluate(context, action)).resolves.toEqual({
-      kind: "DENY",
-      reasonCode: "APPROVAL_REPLAYED",
+      kind: "ALLOW",
+      reasonCode: "ONE_TIME_APPROVAL_GRANTED",
     });
+    expect(approvals.consume(action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
   });
 
   it("denies changed arguments even when nested object keys arrive in a different order", async () => {

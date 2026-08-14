@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 
 import { ActionSchema, ObservationSchema, type Action, type Observation } from "../../../src/domain/action.js";
 import type { JsonValue } from "../../../src/domain/error.js";
+import { ApprovalManager } from "../../../src/governance/approval.js";
 import { PolicyEngine } from "../../../src/governance/policy-engine.js";
 import { ToolRegistry } from "../../../src/tools/registry.js";
 import type { Tool } from "../../../src/tools/types.js";
@@ -76,7 +77,7 @@ describe("ToolRegistry", () => {
     const invalid = await registry.dispatch(context(), { version: 1, id: "invalid", rationale: "Read.", type: "read_file" });
 
     expect(evaluate).not.toHaveBeenCalled();
-    expect(unknown).toMatchObject({ actionId: "unknown", status: "failed", error: { code: "UNKNOWN_ACTION" } });
+    expect(unknown).toMatchObject({ actionId: "unknown", tool: "shell", status: "failed", error: { code: "UNKNOWN_ACTION" } });
     expect(invalid).toMatchObject({ actionId: "invalid", tool: "read_file", status: "failed", error: { code: "INVALID_ACTION" } });
   });
 
@@ -128,6 +129,72 @@ describe("ToolRegistry", () => {
 
     expect(observation.output).toBe("token=[REDACTED]");
   });
+
+  it("does not consume approval when the approved tool is missing", async () => {
+    const approved = approvedWrite("missing-tool");
+    const registry = new ToolRegistry(new PolicyEngine(), []);
+
+    const observation = await registry.dispatch(approved.context, approved.action);
+
+    expect(observation).toMatchObject({ status: "failed", error: { code: "UNKNOWN_ACTION" } });
+    expect(approved.approvals.consume(approved.action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
+  });
+
+  it("does not consume approval when the selected tool schema rejects input", async () => {
+    const approved = approvedWrite("invalid-tool-input");
+    const execute = vi.fn<() => Promise<Observation>>();
+    const registry = new ToolRegistry(new PolicyEngine(), [{
+      type: "create_file",
+      schema: ActionSchema.refine(() => false, "tool-specific rejection"),
+      constraints: [],
+      execute,
+    }]);
+
+    const observation = await registry.dispatch(approved.context, approved.action);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(observation).toMatchObject({ status: "failed", error: { code: "INVALID_ACTION" } });
+    expect(approved.approvals.consume(approved.action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
+  });
+
+  it("consumes an exact approval immediately before executing the validated tool", async () => {
+    const approved = approvedWrite("actual-dispatch");
+    let approvalSeenByTool: ReturnType<ApprovalManager["consume"]> | null = null;
+    const tool: Tool = {
+      type: "create_file",
+      schema: ActionSchema,
+      constraints: [],
+      execute: vi.fn(async (input) => {
+        approvalSeenByTool = approved.approvals.consume(input, 2);
+        return successfulObservation(input);
+      }),
+    };
+    const registry = new ToolRegistry(new PolicyEngine(), [tool]);
+
+    const observation = await registry.dispatch(approved.context, approved.action);
+
+    expect(observation.status).toBe("succeeded");
+    expect(approvalSeenByTool).toEqual({ ok: false, reasonCode: "APPROVAL_REPLAYED" });
+  });
+
+  it("does not consume approval when a policy constraint is unsupported", async () => {
+    const approved = approvedWrite("unsupported-constraint");
+    const execute = vi.fn<() => Promise<Observation>>();
+    const policy = {
+      evaluate: vi.fn(async () => ({
+        kind: "ALLOW",
+        reasonCode: "ONE_TIME_APPROVAL_GRANTED",
+        constraints: [{ kind: "EXCLUDE_SENSITIVE_PATHS_RECURSIVELY" }],
+      } as const)),
+    };
+    const registry = new ToolRegistry(policy, [{ type: "create_file", schema: ActionSchema, constraints: [], execute }]);
+
+    const observation = await registry.dispatch(approved.context, approved.action);
+
+    expect(execute).not.toHaveBeenCalled();
+    expect(observation).toMatchObject({ status: "denied", error: { code: "POLICY_DENIED" } });
+    expect(approved.approvals.consume(approved.action, 2)).toEqual({ ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" });
+  });
 });
 
 function context() {
@@ -141,4 +208,49 @@ function action(overrides: Record<string, unknown>): Action {
   if (type === "list_files") return base as Action;
   if (type === "create_file") return base as Action;
   throw new Error("Unsupported test action");
+}
+
+function approvedWrite(id: string) {
+  const timestamps = [
+    "2026-08-14T12:00:00.000Z",
+    "2026-08-14T12:00:01.000Z",
+    "2026-08-14T12:00:02.000Z",
+  ];
+  const approvals = new ApprovalManager(() => {
+    const timestamp = timestamps.shift();
+    if (timestamp === undefined) throw new Error("Test clock exhausted.");
+    return timestamp;
+  });
+  const approvedAction = action({
+    type: "create_file",
+    id,
+    path: "tests/unit/tools/registry.test.ts",
+    content: "approved content\n",
+  });
+  approvals.request(approvedAction, 2);
+  approvals.approve(approvedAction.id);
+  return {
+    action: approvedAction,
+    approvals,
+    context: {
+      workspaceRoot: process.cwd(),
+      phase: "IMPLEMENT" as const,
+      protectedTests: ["tests/unit/tools/registry.test.ts"],
+      baselineVersion: 2,
+      approvals,
+    },
+  };
+}
+
+function successfulObservation(input: Action): Observation {
+  return {
+    actionId: input.id,
+    tool: input.type,
+    status: "succeeded",
+    startedAt: new Date().toISOString(),
+    durationMs: 1,
+    output: "ok",
+    truncated: false,
+    error: null,
+  };
 }

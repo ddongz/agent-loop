@@ -40,7 +40,7 @@ export type Action = z.infer<typeof ActionSchema>;
 
 export const ObservationSchema = z.object({
   actionId: z.string(),
-  tool: z.enum(["read_file", "list_files", "search_files", "create_file", "apply_patch", "run_validation", "finish", "request_clarification"]),
+  tool: z.string().regex(/^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/),
   status: z.enum(["succeeded", "failed", "denied", "approval_required"]),
   startedAt: z.string().datetime({ offset: true }),
   durationMs: z.number().nonnegative(),

@@ -1,11 +1,13 @@
+import { EventEmitter } from "node:events";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { PassThrough } from "node:stream";
 
 import { describe, expect, it } from "vitest";
 
 import { ObservationSchema } from "../../../src/domain/action.js";
 import { ValidationResultSchema } from "../../../src/domain/validation.js";
-import { createValidationTool } from "../../../src/tools/validation-tool.js";
+import { createValidationTool, runValidationCommand } from "../../../src/tools/validation-tool.js";
 import { createTempRepository } from "../../helpers/temp-repository.js";
 
 describe("validation tool", () => {
@@ -29,6 +31,20 @@ describe("validation tool", () => {
     expect(Buffer.byteLength(result.stdoutSummary)).toBe(65_536);
     expect(Buffer.byteLength(result.stderrSummary)).toBe(65_536);
     expect(result).toMatchObject({ stdoutTruncated: true, stderrTruncated: true });
+  });
+
+  it("truncates validation streams at complete UTF-8 boundaries", async () => {
+    const root = await createTempRepository();
+    const script = join(root, "unicode-output.mjs");
+    await writeFile(script, "process.stdout.write('a'.repeat(65_535) + '界tail');\n", "utf8");
+    const tool = validationTool(root, process.execPath, [script]);
+
+    const observation = await execute(tool, "unicode-output");
+    const [result] = JSON.parse(observation.output) as Array<{ stdoutSummary: string; stdoutTruncated: boolean }>;
+
+    expect(result.stdoutTruncated).toBe(true);
+    expect(result.stdoutSummary).not.toContain("�");
+    expect(Buffer.byteLength(result.stdoutSummary)).toBe(65_535);
   });
 
   it("kills an aborted validation and returns a timeout observation", async () => {
@@ -155,6 +171,39 @@ describe("validation tool", () => {
 
     expect(observation).toMatchObject({ status: "failed", error: { code: "TOOL_TIMEOUT" } });
     await expect(readFile(marker)).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it("classifies an external close signal as validation infrastructure failure", async () => {
+    const root = await createTempRepository();
+    const child = new EventEmitter() as EventEmitter & {
+      stdout: PassThrough;
+      stderr: PassThrough;
+      pid: number;
+      kill: () => boolean;
+    };
+    child.stdout = new PassThrough();
+    child.stderr = new PassThrough();
+    child.pid = 12345;
+    child.kill = () => true;
+    const spawnProcess = (() => child) as unknown as typeof import("node:child_process").spawn;
+
+    const pending = runValidationCommand(
+      root,
+      { validator: "test", executable: "not-invoked", args: [], timeoutMs: 5_000, enabled: true },
+      new AbortController().signal,
+      spawnProcess,
+    );
+    queueMicrotask(() => {
+      child.stdout.end("partial output");
+      child.stderr.end();
+      child.emit("close", null, "SIGTERM");
+    });
+
+    await expect(pending).resolves.toMatchObject({
+      status: "infrastructure_error",
+      exitCode: null,
+      stdoutSummary: "partial output",
+    });
   });
 });
 

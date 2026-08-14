@@ -5,7 +5,7 @@ import { basename, dirname, relative, resolve, sep } from "node:path";
 import { ActionSchema, type Action, type Observation } from "../domain/action.js";
 import { SentinelError } from "../domain/error.js";
 import { isSensitiveWorkspacePath, normalizeWorkspaceRelativePath, resolveWorkspacePath } from "../governance/path-policy.js";
-import { identityRedactor, ObservationTimer, type Redactor, type Tool } from "./types.js";
+import { decodeUtf8Prefix, identityRedactor, ObservationTimer, type Redactor, type Tool } from "./types.js";
 
 const MiB = 1_048_576;
 const outputLimit = 65_536;
@@ -240,77 +240,234 @@ async function applyPatchAction(
   return { output: `patched ${normalizeWorkspaceRelativePath(action.path)}` };
 }
 
+type LineEnding = "" | "\n" | "\r\n";
+
+interface SourceLine {
+  content: string;
+  ending: LineEnding;
+  bytes: Buffer;
+}
+
+interface DiffLine {
+  kind: "context" | "remove" | "add";
+  content: string;
+  oldNoNewline: boolean;
+  newNoNewline: boolean;
+}
+
 interface Hunk {
   oldStart: number;
-  oldLines: string[];
-  newLines: string[];
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: DiffLine[];
 }
 
 function applyUnifiedDiff(original: Buffer, path: string, patch: string): Buffer {
-  const lines = patch.replaceAll("\r\n", "\n").split("\n");
-  if (lines.at(-1) === "") lines.pop();
-  if (lines[0] !== `--- a/${path}` || lines[1] !== `+++ b/${path}`) {
+  const source = parseSourceLines(original);
+  const hunks = parseHunks(path, patch);
+  const output: SourceLine[] = [];
+  let sourceCursor = 0;
+  let precedingHunkIndex: number | null = null;
+
+  for (const hunk of hunks) {
+    const oldIndex = coordinateIndex(hunk.oldStart, hunk.oldCount, "old");
+    if (oldIndex < sourceCursor || oldIndex + hunk.oldCount > source.length) {
+      throw patchConflict("Patch hunks are out of order, overlap, or exceed the original file.");
+    }
+    if (hunk.oldCount === 0 && precedingHunkIndex === oldIndex) {
+      throw patchConflict("Multiple insertion hunks use an ambiguous original coordinate.");
+    }
+
+    output.push(...source.slice(sourceCursor, oldIndex));
+    const expectedNewStart = hunk.newCount === 0 ? output.length : output.length + 1;
+    if (hunk.newStart !== expectedNewStart) {
+      throw patchConflict("Patch new-file coordinates are inconsistent with preceding hunks.");
+    }
+
+    const oldSequence = hunk.lines
+      .filter(({ kind }) => kind !== "add")
+      .map(({ content }) => content);
+    if (oldSequence.length > 0 && countOccurrences(source, oldSequence) > 1) {
+      throw patchConflict("Patch context is ambiguous.");
+    }
+
+    const oldRegion = source.slice(oldIndex, oldIndex + hunk.oldCount);
+    const removedEndings: LineEnding[] = [];
+    let oldOffset = 0;
+    for (const line of hunk.lines) {
+      if (line.kind === "add") continue;
+      if (line.kind === "remove") removedEndings.push(source[oldIndex + oldOffset]?.ending ?? "");
+      oldOffset += 1;
+    }
+    let consumed = 0;
+    let added = 0;
+    for (const line of hunk.lines) {
+      if (line.kind === "add") {
+        const ending = line.newNoNewline ? "" : additionEnding(source, oldRegion, removedEndings, oldIndex, added);
+        output.push(makeLine(line.content, ending));
+        added += 1;
+        continue;
+      }
+
+      const originalLine = source[oldIndex + consumed];
+      if (originalLine === undefined || originalLine.content !== line.content) {
+        throw patchConflict("Patch context does not match the original file coordinate.");
+      }
+      if (line.oldNoNewline !== (originalLine.ending === "")) {
+        throw patchConflict("Patch old-side EOF newline marker does not match the original bytes.");
+      }
+      if (line.kind === "context") {
+        if (line.newNoNewline !== (originalLine.ending === "")) {
+          throw patchConflict("Patch context has inconsistent EOF newline markers.");
+        }
+        output.push(originalLine);
+      }
+      consumed += 1;
+    }
+    if (consumed !== hunk.oldCount || outputLineCount(hunk.lines) !== hunk.newCount) {
+      throw patchConflict("Patch hunk counts do not match its operations.");
+    }
+    sourceCursor = oldIndex + hunk.oldCount;
+    precedingHunkIndex = oldIndex;
+  }
+
+  output.push(...source.slice(sourceCursor));
+  if (output.slice(0, -1).some(({ ending }) => ending === "")) {
+    throw patchConflict("A no-newline marker can describe only the final output line.");
+  }
+  return Buffer.concat(output.map(({ bytes }) => bytes));
+}
+
+function parseHunks(path: string, patch: string): Hunk[] {
+  const patchLines = patch.replaceAll("\r\n", "\n").split("\n");
+  if (patchLines.at(-1) === "") patchLines.pop();
+  if (patchLines[0] !== `--- a/${path}` || patchLines[1] !== `+++ b/${path}`) {
     throw patchConflict("Patch headers do not match the requested path.");
   }
-  if (lines.slice(2).some((line) => line.startsWith("--- ") || line.startsWith("+++ "))) {
+  if (patchLines.slice(2).some((line) => line.startsWith("--- ") || line.startsWith("+++ "))) {
     throw patchConflict("A patch action can modify only one file.");
   }
+
   const hunks: Hunk[] = [];
-  for (let index = 2; index < lines.length;) {
-    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/.exec(lines[index] ?? "");
+  for (let index = 2; index < patchLines.length;) {
+    const header = /^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@(?: .*)?$/.exec(patchLines[index] ?? "");
     if (header === null) throw patchConflict("Patch contains malformed hunk metadata.");
-    const oldStart = Number(header[1]);
-    const expectedOld = header[2] === undefined ? 1 : Number(header[2]);
-    const expectedNew = header[4] === undefined ? 1 : Number(header[4]);
+    const oldStart = parseCoordinate(header[1]);
+    const oldCount = parseCoordinate(header[2] ?? "1");
+    const newStart = parseCoordinate(header[3]);
+    const newCount = parseCoordinate(header[4] ?? "1");
+    coordinateIndex(oldStart, oldCount, "old");
+    coordinateIndex(newStart, newCount, "new");
     index += 1;
-    const oldLines: string[] = [];
-    const newLines: string[] = [];
-    while (index < lines.length && !lines[index]?.startsWith("@@ ")) {
-      const line = lines[index] ?? "";
-      if (line === "\\ No newline at end of file") {
+    const lines: DiffLine[] = [];
+    while (index < patchLines.length && !patchLines[index]?.startsWith("@@ ")) {
+      const raw = patchLines[index] ?? "";
+      if (raw === "\\ No newline at end of file") {
+        const previous = lines.at(-1);
+        if (previous === undefined) throw patchConflict("EOF marker has no preceding diff line.");
+        if (previous.kind !== "add") {
+          if (previous.oldNoNewline) throw patchConflict("Patch repeats an old-side EOF marker.");
+          previous.oldNoNewline = true;
+        }
+        if (previous.kind !== "remove") {
+          if (previous.newNoNewline) throw patchConflict("Patch repeats a new-side EOF marker.");
+          previous.newNoNewline = true;
+        }
         index += 1;
         continue;
       }
-      const prefix = line[0];
-      const content = line.slice(1);
-      if (prefix === " ") { oldLines.push(content); newLines.push(content); }
-      else if (prefix === "-") oldLines.push(content);
-      else if (prefix === "+") newLines.push(content);
-      else throw patchConflict("Patch contains an invalid hunk line.");
+      const prefix = raw[0];
+      const content = raw.slice(1);
+      const kind = prefix === " " ? "context" : prefix === "-" ? "remove" : prefix === "+" ? "add" : null;
+      if (kind === null) throw patchConflict("Patch contains an invalid hunk line.");
+      lines.push({ kind, content, oldNoNewline: false, newNoNewline: false });
       index += 1;
     }
-    if (oldLines.length !== expectedOld || newLines.length !== expectedNew) {
+    const actualOld = lines.filter(({ kind }) => kind !== "add").length;
+    const actualNew = outputLineCount(lines);
+    if (actualOld !== oldCount || actualNew !== newCount) {
       throw patchConflict("Patch hunk counts do not match its header.");
     }
-    hunks.push({ oldStart, oldLines, newLines });
+    hunks.push({ oldStart, oldCount, newStart, newCount, lines });
   }
   if (hunks.length === 0) throw patchConflict("Patch contains no hunks.");
+  return hunks;
+}
 
-  const decoded = new TextDecoder("utf-8", { fatal: true }).decode(original);
-  const newline = decoded.includes("\r\n") ? "\r\n" : "\n";
-  const terminalNewline = decoded.endsWith("\n");
-  const source = decoded.replaceAll("\r\n", "\n");
-  const current = source.slice(0, terminalNewline ? -1 : undefined).split("\n");
-  if (source.length === 0) current.splice(0);
-
-  for (const hunk of hunks) {
-    let position: number;
-    if (hunk.oldLines.length === 0) {
-      position = Math.max(0, Math.min(current.length, hunk.oldStart - 1));
-    } else {
-      const candidates: number[] = [];
-      for (let index = 0; index <= current.length - hunk.oldLines.length; index += 1) {
-        if (hunk.oldLines.every((line, offset) => current[index + offset] === line)) candidates.push(index);
-      }
-      if (candidates.length !== 1) {
-        throw patchConflict(candidates.length === 0 ? "Patch context does not match the file." : "Patch context is ambiguous.");
-      }
-      position = candidates[0] as number;
-    }
-    current.splice(position, hunk.oldLines.length, ...hunk.newLines);
+function parseSourceLines(original: Buffer): SourceLine[] {
+  const lines: SourceLine[] = [];
+  let start = 0;
+  for (let index = 0; index < original.length; index += 1) {
+    if (original[index] !== 0x0a) continue;
+    const crlf = index > start && original[index - 1] === 0x0d;
+    const contentEnd = crlf ? index - 1 : index;
+    const contentBytes = original.subarray(start, contentEnd);
+    lines.push({
+      content: decodeSourceContent(contentBytes),
+      ending: crlf ? "\r\n" : "\n",
+      bytes: original.subarray(start, index + 1),
+    });
+    start = index + 1;
   }
-  const result = current.join(newline) + (terminalNewline ? newline : "");
-  return Buffer.from(result, "utf8");
+  if (start < original.length) {
+    const contentBytes = original.subarray(start);
+    lines.push({ content: decodeSourceContent(contentBytes), ending: "", bytes: contentBytes });
+  }
+  return lines;
+}
+
+function decodeSourceContent(content: Buffer): string {
+  try {
+    return new TextDecoder("utf-8", { fatal: true, ignoreBOM: true }).decode(content);
+  } catch (error) {
+    throw new SentinelError({ code: "INVALID_INPUT", message: "Patched file is not valid UTF-8 text.", cause: error });
+  }
+}
+
+function coordinateIndex(start: number, count: number, side: "old" | "new"): number {
+  if (count === 0) return start;
+  if (start < 1) throw patchConflict(`Patch ${side}-side non-empty range must start at line 1 or later.`);
+  return start - 1;
+}
+
+function parseCoordinate(value: string | undefined): number {
+  const coordinate = Number(value);
+  if (!Number.isSafeInteger(coordinate) || coordinate < 0) throw patchConflict("Patch coordinates must be safe non-negative integers.");
+  return coordinate;
+}
+
+function countOccurrences(source: readonly SourceLine[], sequence: readonly string[]): number {
+  let count = 0;
+  for (let index = 0; index <= source.length - sequence.length; index += 1) {
+    if (sequence.every((content, offset) => source[index + offset]?.content === content)) count += 1;
+  }
+  return count;
+}
+
+function outputLineCount(lines: readonly DiffLine[]): number {
+  return lines.filter(({ kind }) => kind !== "remove").length;
+}
+
+function additionEnding(
+  source: readonly SourceLine[],
+  oldRegion: readonly SourceLine[],
+  removedEndings: readonly LineEnding[],
+  oldIndex: number,
+  addedIndex: number,
+): Exclude<LineEnding, ""> {
+  const replaced = removedEndings[addedIndex];
+  if (replaced === "\n" || replaced === "\r\n") return replaced;
+  const candidates = [
+    source[oldIndex - 1]?.ending,
+    ...oldRegion.map(({ ending }) => ending),
+    source[oldIndex + oldRegion.length]?.ending,
+  ];
+  return candidates.find((ending): ending is "\n" | "\r\n" => ending === "\n" || ending === "\r\n") ?? "\n";
+}
+
+function makeLine(content: string, ending: LineEnding): SourceLine {
+  return { content, ending, bytes: Buffer.from(`${content}${ending}`, "utf8") };
 }
 
 function assertText(content: Buffer, label: string): void {
@@ -320,19 +477,6 @@ function assertText(content: Buffer, label: string): void {
   } catch (error) {
     throw new SentinelError({ code: "INVALID_INPUT", message: `${label} is not valid UTF-8 text.`, cause: error });
   }
-}
-
-function decodeUtf8Prefix(content: Buffer, mayEndMidCharacter: boolean): string {
-  const decoder = new TextDecoder("utf-8", { fatal: true });
-  const maximumTrim = mayEndMidCharacter ? Math.min(3, content.byteLength) : 0;
-  for (let trim = 0; trim <= maximumTrim; trim += 1) {
-    try {
-      return decoder.decode(content.subarray(0, content.byteLength - trim));
-    } catch {
-      // Only an incomplete final UTF-8 sequence may be removed from bounded output.
-    }
-  }
-  throw invalidInput("File content is not valid UTF-8 text.");
 }
 
 function assertWritableText(content: string, label: string): void {
@@ -346,15 +490,18 @@ function assertNotAborted(signal: AbortSignal): void {
 function boundText(value: string, maxBytes: number): { output: string; truncated: boolean } {
   const content = Buffer.from(value, "utf8");
   if (content.byteLength <= maxBytes) return { output: value, truncated: false };
-  const decoder = new TextDecoder("utf-8");
-  return { output: decoder.decode(content.subarray(0, maxBytes)), truncated: true };
+  return { output: decodeUtf8Prefix(content.subarray(0, maxBytes), true), truncated: true };
 }
 
 function globPattern(glob: string): RegExp {
   let pattern = "^";
   for (let index = 0; index < glob.length; index += 1) {
     const character = glob[index] as string;
-    if (character === "*" && glob[index + 1] === "*") { pattern += ".*"; index += 1; }
+    if (character === "*" && glob[index + 1] === "*" && glob[index + 2] === "/") {
+      pattern += "(?:.*/)?";
+      index += 2;
+    }
+    else if (character === "*" && glob[index + 1] === "*") { pattern += ".*"; index += 1; }
     else if (character === "*") pattern += "[^/]*";
     else if (character === "?") pattern += "[^/]";
     else pattern += character.replace(/[\\^$.*+?()[\]{}|]/g, "\\$&");

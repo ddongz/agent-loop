@@ -64,6 +64,15 @@ export class ToolRegistry {
         detail: { reason: toolInput.error.message },
       }));
     }
+    if (decision.reasonCode === "ONE_TIME_APPROVAL_GRANTED") {
+      if (context.approvals === undefined) {
+        return timer.fail(new SentinelError({ code: "INTERNAL", message: "Policy granted an approval without an approval manager." }));
+      }
+      const consumption = context.approvals.consume(action, context.baselineVersion);
+      if (!consumption.ok) {
+        return policyObservation(timer, "denied", "POLICY_DENIED", consumption.reasonCode);
+      }
+    }
 
     try {
       const observation = await tool.execute(toolInput.data, context.signal ?? new AbortController().signal);
@@ -78,7 +87,7 @@ export class ToolRegistry {
   }
 
   #protocolFailure(rawAction: unknown, reason: string): Observation {
-    const candidate = protocolAction(rawAction);
+    const candidate = protocolSubject(rawAction);
     const timer = new ObservationTimer(candidate, this.#redact);
     const rawType = typeof rawAction === "object" && rawAction !== null && "type" in rawAction
       ? (rawAction as { type?: unknown }).type
@@ -122,23 +131,11 @@ function policyObservation(
   return { ...failed, status };
 }
 
-function protocolAction(raw: unknown): Action {
+function protocolSubject(raw: unknown): { id: string; type: string } {
   const record = typeof raw === "object" && raw !== null ? raw as Record<string, unknown> : {};
-  const type = typeof record.type === "string" && actionTypes.has(record.type as Action["type"])
-    ? record.type as Action["type"]
-    : "request_clarification";
+  const type = typeof record.type === "string" && /^[A-Za-z][A-Za-z0-9_.:-]{0,127}$/.test(record.type)
+    ? record.type
+    : "unknown";
   const id = typeof record.id === "string" && record.id.length > 0 && record.id.length <= 64 ? record.id : "invalid-action";
-  if (type === "request_clarification") {
-    return { version: 1, id, rationale: "Protocol failure.", type, question: "Invalid action." };
-  }
-  const base = { version: 1 as const, id, rationale: "Protocol failure.", type };
-  switch (type) {
-    case "read_file": return { ...base, type, path: "invalid", maxBytes: 65_536 };
-    case "list_files": return { ...base, type, maxDepth: 5, maxEntries: 200 };
-    case "search_files": return { ...base, type, query: "invalid", maxResults: 200 };
-    case "create_file": return { ...base, type, path: "invalid", content: "" };
-    case "apply_patch": return { ...base, type, path: "invalid", patch: "" };
-    case "run_validation": return { ...base, type, validator: "test" };
-    case "finish": return { ...base, type, summary: "Invalid action." };
-  }
+  return { id, type };
 }

@@ -11,6 +11,7 @@ export type PolicyReasonCode =
   | "SENSITIVE_PATH"
   | "PATH_ESCAPE"
   | "PROTECTED_TEST_MUTATION"
+  | "ONE_TIME_APPROVAL_GRANTED"
   | "ONE_TIME_APPROVAL_CONSUMED"
   | ApprovalFailureReason;
 
@@ -68,12 +69,12 @@ export class PolicyEngine {
 
     if (isWrite(action) && actionPath !== null && isProtected(actionPath, context.protectedTests)) {
       if (context.approvals === undefined) return requireApproval();
-      const consumption = context.approvals.consume(action, context.baselineVersion);
-      if (consumption.ok) return allow(consumption.reasonCode);
-      if (consumption.reasonCode === "APPROVAL_MISSING" || consumption.reasonCode === "APPROVAL_NOT_GRANTED") {
+      const approval = context.approvals.check(action, context.baselineVersion);
+      if (approval.ok) return allow(approval.reasonCode);
+      if (approval.reasonCode === "APPROVAL_MISSING" || approval.reasonCode === "APPROVAL_NOT_GRANTED") {
         return requireApproval();
       }
-      return deny(consumption.reasonCode);
+      return deny(approval.reasonCode);
     }
 
     if (action.type === "list_files" || action.type === "search_files") {
@@ -108,7 +109,7 @@ function comparisonKey(path: string): string {
 }
 
 function allow(
-  reasonCode: Extract<PolicyReasonCode, "PHASE_ACTION_ALLOWED" | "ONE_TIME_APPROVAL_CONSUMED">,
+  reasonCode: Extract<PolicyReasonCode, "PHASE_ACTION_ALLOWED" | "ONE_TIME_APPROVAL_GRANTED" | "ONE_TIME_APPROVAL_CONSUMED">,
   constraints?: readonly PolicyConstraint[],
 ): PolicyDecision {
   return constraints === undefined

@@ -100,6 +100,36 @@ describe("file tools", () => {
     expect(observation).toMatchObject({ status: "succeeded", truncated: false });
   });
 
+  it("truncates search output at a valid UTF-8 boundary", async () => {
+    const root = await createTempRepository();
+    const prefixBytes = Buffer.byteLength("large.txt:1:1:");
+    const line = `needle${"a".repeat(65_535 - prefixBytes - Buffer.byteLength("needle"))}界tail`;
+    await writeFile(join(root, "large.txt"), line, "utf8");
+    const searchTool = requiredTool(root, "search_files");
+
+    const observation = await searchTool.execute(
+      { version: 1, id: "utf8-search", rationale: "Bound output.", type: "search_files", query: "needle", maxResults: 10 },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "succeeded", truncated: true });
+    expect(observation.output).not.toContain("�");
+    expect(Buffer.byteLength(observation.output)).toBe(65_535);
+  });
+
+  it("treats a leading double-star directory segment as zero or more directories", async () => {
+    const root = await createTempRepository();
+    await writeFile(join(root, "root.ts"), "root-needle\n", "utf8");
+    const searchTool = requiredTool(root, "search_files");
+
+    const observation = await searchTool.execute(
+      { version: 1, id: "root-glob", rationale: "Match root file.", type: "search_files", query: "root-needle", glob: "**/*.ts", maxResults: 10 },
+      new AbortController().signal,
+    );
+
+    expect(observation.output).toBe("root.ts:1:1:root-needle");
+  });
+
   it("creates a text file atomically without leaving a temporary sibling", async () => {
     const root = await createTempRepository();
     await mkdir(join(root, "src"));
@@ -210,6 +240,131 @@ describe("file tools", () => {
 
     expect(observation).toMatchObject({ status: "failed", error: { code: "PATCH_CONFLICT" } });
     expect(await readFile(target)).toEqual(original);
+  });
+
+  it("rejects exact text when the hunk old coordinate points at a different line", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "coordinates.txt");
+    const original = Buffer.from("first\nsecond\n", "utf8");
+    await writeFile(target, original);
+    const patchTool = requiredTool(root, "apply_patch");
+
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "wrong-old-coordinate", rationale: "Patch exact coordinate.", type: "apply_patch", path: "coordinates.txt",
+        patch: "--- a/coordinates.txt\n+++ b/coordinates.txt\n@@ -1 +1 @@\n-second\n+changed\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "failed", error: { code: "PATCH_CONFLICT" } });
+    expect(await readFile(target)).toEqual(original);
+  });
+
+  it("applies ordered hunks using original and accumulated output coordinates", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "multi-hunk.txt");
+    await writeFile(target, "a\nb\nc\n", "utf8");
+    const patchTool = requiredTool(root, "apply_patch");
+
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "multi-coordinate", rationale: "Apply ordered hunks.", type: "apply_patch", path: "multi-hunk.txt",
+        patch: "--- a/multi-hunk.txt\n+++ b/multi-hunk.txt\n@@ -1,0 +2 @@\n+x\n@@ -3 +4 @@\n-c\n+C\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "succeeded", error: null });
+    expect(await readFile(target, "utf8")).toBe("a\nx\nb\nC\n");
+  });
+
+  it("never lets a later hunk consume text introduced by an earlier hunk", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "introduced.txt");
+    const original = Buffer.from("alpha\nbeta\n", "utf8");
+    await writeFile(target, original);
+    const patchTool = requiredTool(root, "apply_patch");
+
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "introduced-context", rationale: "Reject introduced context.", type: "apply_patch", path: "introduced.txt",
+        patch: "--- a/introduced.txt\n+++ b/introduced.txt\n@@ -1 +1 @@\n-alpha\n+introduced\n@@ -2 +2 @@\n-introduced\n+changed\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "failed", error: { code: "PATCH_CONFLICT" } });
+    expect(await readFile(target)).toEqual(original);
+  });
+
+  it("rejects impossible new-file hunk coordinates", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "new-coordinate.txt");
+    const original = Buffer.from("one\n", "utf8");
+    await writeFile(target, original);
+    const patchTool = requiredTool(root, "apply_patch");
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "wrong-new-coordinate", rationale: "Reject metadata.", type: "apply_patch", path: "new-coordinate.txt",
+        patch: "--- a/new-coordinate.txt\n+++ b/new-coordinate.txt\n@@ -1 +2 @@\n-one\n+ONE\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation).toMatchObject({ status: "failed", error: { code: "PATCH_CONFLICT" } });
+    expect(await readFile(target)).toEqual(original);
+  });
+
+  it("adds an EOF newline when only the old diff side has the no-newline marker", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "add-eof-newline.txt");
+    await writeFile(target, "old", "utf8");
+    const patchTool = requiredTool(root, "apply_patch");
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "add-eof", rationale: "Add EOF newline.", type: "apply_patch", path: "add-eof-newline.txt",
+        patch: "--- a/add-eof-newline.txt\n+++ b/add-eof-newline.txt\n@@ -1 +1 @@\n-old\n\\ No newline at end of file\n+old\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation.status).toBe("succeeded");
+    expect(await readFile(target)).toEqual(Buffer.from("old\n"));
+  });
+
+  it("removes an EOF newline when only the new diff side has the no-newline marker", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "remove-eof-newline.txt");
+    await writeFile(target, "old\n", "utf8");
+    const patchTool = requiredTool(root, "apply_patch");
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "remove-eof", rationale: "Remove EOF newline.", type: "apply_patch", path: "remove-eof-newline.txt",
+        patch: "--- a/remove-eof-newline.txt\n+++ b/remove-eof-newline.txt\n@@ -1 +1 @@\n-old\n+old\n\\ No newline at end of file\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation.status).toBe("succeeded");
+    expect(await readFile(target)).toEqual(Buffer.from("old"));
+  });
+
+  it("preserves untouched mixed line endings and inherits the replaced line ending", async () => {
+    const root = await createTempRepository();
+    const target = join(root, "mixed-endings.txt");
+    await writeFile(target, Buffer.from("one\r\ntwo\nthree\r\n", "utf8"));
+    const patchTool = requiredTool(root, "apply_patch");
+    const observation = await patchTool.execute(
+      {
+        version: 1, id: "mixed-endings", rationale: "Preserve untouched bytes.", type: "apply_patch", path: "mixed-endings.txt",
+        patch: "--- a/mixed-endings.txt\n+++ b/mixed-endings.txt\n@@ -1,2 +1,2 @@\n one\n-two\n+TWO\n",
+      },
+      new AbortController().signal,
+    );
+
+    expect(observation.status).toBe("succeeded");
+    expect(await readFile(target)).toEqual(Buffer.from("one\r\nTWO\nthree\r\n", "utf8"));
   });
 
   it("rejects a multi-file patch even when the first header matches", async () => {

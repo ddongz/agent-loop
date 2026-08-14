@@ -16,6 +16,10 @@ export type ApprovalConsumption =
   | { ok: true; reasonCode: "ONE_TIME_APPROVAL_CONSUMED" }
   | { ok: false; reasonCode: ApprovalFailureReason };
 
+export type ApprovalCheck =
+  | { ok: true; reasonCode: "ONE_TIME_APPROVAL_GRANTED" }
+  | { ok: false; reasonCode: ApprovalFailureReason };
+
 export interface ApprovalRecord {
   actionId: string;
   fingerprint: string;
@@ -90,7 +94,7 @@ export class ApprovalManager {
     return { ...record };
   }
 
-  consume(action: Action, baselineVersion: number): ApprovalConsumption {
+  check(action: Action, baselineVersion: number): ApprovalCheck {
     const record = this.#records.get(action.id);
     if (record === undefined) return { ok: false, reasonCode: "APPROVAL_MISSING" };
     if (record.rejectedAt !== null) return { ok: false, reasonCode: "APPROVAL_REJECTED" };
@@ -100,6 +104,16 @@ export class ApprovalManager {
       return { ok: false, reasonCode: "APPROVAL_ARGUMENT_MISMATCH" };
     }
     if (record.approvedAt === null) return { ok: false, reasonCode: "APPROVAL_NOT_GRANTED" };
+    return { ok: true, reasonCode: "ONE_TIME_APPROVAL_GRANTED" };
+  }
+
+  consume(action: Action, baselineVersion: number): ApprovalConsumption {
+    const checked = this.check(action, baselineVersion);
+    if (!checked.ok) return checked;
+    const record = this.#records.get(action.id);
+    if (record === undefined || record.approvedAt === null) {
+      throw new SentinelError({ code: "INTERNAL", message: "Approved action disappeared before consumption." });
+    }
     record.consumedAt = this.#timestampAfter(record.approvedAt, "Approval consumption");
     return { ok: true, reasonCode: "ONE_TIME_APPROVAL_CONSUMED" };
   }
