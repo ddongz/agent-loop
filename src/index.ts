@@ -1,7 +1,8 @@
 #!/usr/bin/env node
 
 import { randomUUID } from "node:crypto";
-import { pathToFileURL } from "node:url";
+import { realpathSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 
 import { NodeCliIO } from "./cli/io.js";
 import { createProgram, type CliProgram } from "./cli/program.js";
@@ -58,6 +59,17 @@ export async function main(argv: readonly string[] = process.argv.slice(2)): Pro
 }
 
 const entryPath = process.argv[1];
-if (entryPath !== undefined && import.meta.url === pathToFileURL(entryPath).href) {
+if (entryPath !== undefined && isMainEntry(entryPath)) {
   process.exitCode = await main();
+}
+
+// npm's .bin shims on Unix invoke the entry through a symlink, and the ESM
+// loader reports the realpath'd module URL; compare canonical paths so a
+// linked entry still runs the CLI instead of exiting silently.
+function isMainEntry(entryPath: string): boolean {
+  try {
+    return realpathSync(entryPath) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
 }
