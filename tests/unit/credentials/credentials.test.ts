@@ -33,7 +33,6 @@ describe("credentials", () => {
 
   it.each([
     ["win32", "powershell.exe"],
-    ["darwin", "security"],
     ["linux", "secret-tool"],
   ] as const)("passes secrets to the %s backend only through stdin with shell disabled", async (platform, executable) => {
     const requests: ProcessRequest[] = [];
@@ -52,6 +51,45 @@ describe("credentials", () => {
     expect(requests[0]).toMatchObject({ executable, shell: false });
     expect(requests[0]!.args.join(" ")).not.toContain(secret);
     expect(requests[0]!.stdin).toContain(secret);
+  });
+
+  it("fails closed on macOS set without putting the secret in argv or an error", async () => {
+    const requests: ProcessRequest[] = [];
+    const runner: ProcessRunner = {
+      run: async (request) => {
+        requests.push(request);
+        return { exitCode: 0, stdout: "", stderr: "" };
+      },
+    };
+    const secret = "opaque-value-4nY7q";
+    const store = new PlatformCredentialStore({ platform: "darwin", runner });
+
+    const error = await store.set("team", secret).catch((caught: unknown) => caught);
+
+    expect(error).toMatchObject({ code: "CREDENTIAL_BACKEND_UNAVAILABLE" });
+    expect(String(error)).toContain("macOS");
+    expect(String(error)).not.toContain(secret);
+    expect(requests.flatMap((request) => request.args).join(" ")).not.toContain(secret);
+    expect(requests).toHaveLength(0);
+  });
+
+  it("keeps macOS credential lookup structured and free of secret arguments", async () => {
+    const requests: ProcessRequest[] = [];
+    const runner: ProcessRunner = {
+      run: async (request) => {
+        requests.push(request);
+        return {
+          exitCode: 0,
+          stdout: JSON.stringify({ secret: "stored-value", updatedAt: "2026-08-14T08:00:00.000Z" }),
+          stderr: "",
+        };
+      },
+    };
+    const store = new PlatformCredentialStore({ platform: "darwin", runner });
+
+    expect(await store.metadata("team")).toEqual({ configured: true, updatedAt: "2026-08-14T08:00:00.000Z" });
+    expect(requests[0]).toMatchObject({ executable: "security", shell: false, stdin: "" });
+    expect(requests[0]!.args).toEqual(["find-generic-password", "-a", "team", "-s", "SentinelLoop", "-w"]);
   });
 
   it("turns a missing platform command into an actionable hard error without plaintext fallback", async () => {

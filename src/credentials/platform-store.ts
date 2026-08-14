@@ -96,6 +96,9 @@ export class PlatformCredentialStore implements CredentialStore {
 
   async set(profile: string, secret: string): Promise<void> {
     this.#assertInput(profile, secret);
+    if (this.#platform === "darwin") {
+      throw backendError("macOS auth set is disabled because the security CLI accepts the password through argv; use an approved native Keychain integration and retry.");
+    }
     const record = JSON.stringify({ secret, updatedAt: this.#now() } satisfies SecureRecord);
     const result = await this.#invoke("set", profile, `${record}\n`);
     if (result.exitCode !== 0) throw backendError(this.#recoveryMessage());
@@ -164,8 +167,7 @@ function commandFor(platform: SupportedPlatform, operation: "set" | "get" | "del
     return { executable: "powershell.exe", args: ["-NoProfile", "-NonInteractive", "-Command", windowsScript, operation, profile, service], stdin, shell: false };
   }
   if (platform === "darwin") {
-    const verb = operation === "set" ? ["add-generic-password", "-U", "-a", profile, "-s", service, "-w"]
-      : operation === "get" ? ["find-generic-password", "-a", profile, "-s", service, "-w"]
+    const verb = operation === "get" ? ["find-generic-password", "-a", profile, "-s", service, "-w"]
         : ["delete-generic-password", "-a", profile, "-s", service];
     return { executable: "security", args: verb, stdin, shell: false };
   }
