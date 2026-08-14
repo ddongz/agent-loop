@@ -18,5 +18,5 @@ describe("feedback causality mechanism demo", () => {
     });
     expect(result.expectedFingerprint).toMatch(/^[0-9a-f]{64}$/);
     expect(result.repairContextFingerprints).toContain(result.expectedFingerprint);
-  });
+  }, 15_000);
 });

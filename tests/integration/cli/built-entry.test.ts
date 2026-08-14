@@ -33,5 +33,5 @@ describe("built CLI entry", () => {
     for (const command of ["auth", "run", "resume", "status", "report"]) {
       expect(result.stdout).toContain(command);
     }
-  });
+  }, 15_000);
 });

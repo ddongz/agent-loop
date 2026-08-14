@@ -1,0 +1,15 @@
+image: node:22.12.0
+
+stages:
+  - test
+
+unit-test:
+  stage: test
+  script:
+    - npm ci
+    - npm run check
+    - npm run demo
+    - npm pack
+  artifacts:
+    paths:
+      - "*.tgz"

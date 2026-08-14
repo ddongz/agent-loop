@@ -1,14 +1,35 @@
 {
   "name": "sentinelloop-cli",
   "version": "0.1.0",
-  "private": true,
+  "description": "Deterministic TDD coding-agent harness for clean TypeScript repositories",
   "type": "module",
+  "license": "MIT",
+  "keywords": [
+    "coding-agent",
+    "tdd",
+    "cli",
+    "typescript"
+  ],
   "engines": {
     "node": ">=22.12.0"
+  },
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
   },
   "bin": {
     "sentinelloop": "dist/index.js"
   },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "THIRD_PARTY_LICENSES.md"
+  ],
   "scripts": {
     "build": "tsc",
     "demo": "tsc --ignoreConfig --outDir .demo-dist --rootDir . --module NodeNext --moduleResolution NodeNext --target ES2024 --skipLibCheck scripts/mechanism-demo.ts && node -e \"const {spawnSync}=require('node:child_process'),fs=require('node:fs');const r=spawnSync(process.execPath,['.demo-dist/scripts/mechanism-demo.js'],{stdio:'inherit'});fs.rmSync('.demo-dist',{recursive:true,force:true});process.exit(r.status??1)\"",
