@@ -157,6 +157,29 @@ describe("OpenAICompatibleClient", () => {
     }
   }, 500);
 
+  it("enforces its deadline after headers when the response body stalls", async () => {
+    vi.useFakeTimers();
+    try {
+      let cancelled = false;
+      const body = new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode("{"));
+        },
+        cancel() {
+          cancelled = true;
+        }
+      });
+      const stalled: FetchTransport = async () => new Response(body);
+      const pending = client(stalled, { timeoutMs: 10 }).complete(request());
+      const rejection = expect(pending).rejects.toMatchObject({ code: "LLM_TIMEOUT" });
+      await vi.advanceTimersByTimeAsync(10);
+      await rejection;
+      expect(cancelled).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it.each([
     ["zero choices", { choices: [] }],
     ["multiple choices", { choices: completion().choices.concat(completion().choices) }],

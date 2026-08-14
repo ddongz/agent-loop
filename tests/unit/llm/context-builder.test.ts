@@ -4,7 +4,7 @@ import { TaskEventSchema, TaskStateSchema, type TaskEvent, type TaskState } from
 import type { Feedback } from "../../../src/domain/validation.js";
 import { buildContext, CONTEXT_SECTION_LIMITS } from "../../../src/llm/context-builder.js";
 
-const secret = "sk-live-super-secret-123456789";
+const secret = "opaque-credential-ABCDEFGHIJKLMN";
 
 function task(): TaskState {
   return TaskStateSchema.parse({
@@ -82,7 +82,8 @@ describe("buildContext", () => {
       systemGovernance: `Never reveal ${secret}; use one tool.`,
       repositorySummary: `src/user.ts contains ${secret}`,
       tools: [{ name: "read_file", description: "Read a bounded file.", inputSchema: { type: "object" } }],
-      observations: [{ actionId: "read-1", tool: "read_file", status: "succeeded", output: `content ${secret}`, truncated: false }]
+      observations: [{ actionId: "read-1", tool: "read_file", status: "succeeded", output: `content ${secret}`, truncated: false }],
+      sensitiveValues: [secret]
     });
     const serialized = JSON.stringify(request);
 

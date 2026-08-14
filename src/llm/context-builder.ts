@@ -31,6 +31,7 @@ export interface BuildContextOptions {
   repositorySummary: string;
   tools: readonly CompletionTool[];
   observations?: readonly Observation[] | readonly ContextObservation[];
+  sensitiveValues?: readonly string[];
 }
 
 const relevantEventTypes = new Set<TaskEvent["type"]>([
@@ -78,7 +79,8 @@ export function buildContext(
     }))
   };
 
-  const parsed = CompletionRequestSchema.safeParse(request);
+  const redactedRequest = redactSensitiveJson(request, options.sensitiveValues ?? []);
+  const parsed = CompletionRequestSchema.safeParse(redactedRequest);
   if (!parsed.success) {
     throw new SentinelError({
       code: "INVALID_INPUT",
@@ -88,6 +90,22 @@ export function buildContext(
     });
   }
   return parsed.data;
+}
+
+function redactSensitiveJson(value: unknown, sensitiveValues: readonly string[]): unknown {
+  const secrets = [...new Set(sensitiveValues.filter((item) => item.length > 0))]
+    .sort((left, right) => right.length - left.length);
+  if (typeof value === "string") {
+    return secrets.reduce((text, secret) => text.replaceAll(secret, "[REDACTED]"), value);
+  }
+  if (Array.isArray(value)) return value.map((item) => redactSensitiveJson(item, secrets));
+  if (value !== null && typeof value === "object") {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [
+      secrets.reduce((text, secret) => text.replaceAll(secret, "[REDACTED]"), key),
+      redactSensitiveJson(item, secrets)
+    ]));
+  }
+  return value;
 }
 
 function compactFeedback(feedback: Feedback | null): CompletionRequest["context"]["feedback"] {

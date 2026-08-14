@@ -115,7 +115,7 @@ export class OpenAICompatibleClient implements LLMClient {
       });
       const response = await Promise.race([transport, cancellation]);
       if (!response.ok) throw mapHttpError(response.status);
-      const text = await readBoundedResponse(response);
+      const text = await Promise.race([readBoundedResponse(response, controller.signal), cancellation]);
       let body: unknown;
       try {
         body = JSON.parse(text);
@@ -137,9 +137,13 @@ export class OpenAICompatibleClient implements LLMClient {
   }
 }
 
-async function readBoundedResponse(response: Response): Promise<string> {
+async function readBoundedResponse(response: Response, signal: AbortSignal): Promise<string> {
   if (response.body === null) return "";
   const reader = response.body.getReader();
+  const onAbort = () => {
+    void reader.cancel(signal.reason).catch(() => undefined);
+  };
+  signal.addEventListener("abort", onAbort, { once: true });
   const chunks: Uint8Array[] = [];
   let totalBytes = 0;
   try {
@@ -154,6 +158,7 @@ async function readBoundedResponse(response: Response): Promise<string> {
       chunks.push(value);
     }
   } finally {
+    signal.removeEventListener("abort", onAbort);
     reader.releaseLock();
   }
 
