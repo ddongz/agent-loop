@@ -77,6 +77,58 @@ describe("TaskOrchestrator feedback loop", () => {
     const feedbackEvents = eventPayload(await eventStore.list(state.id), "FEEDBACK_CREATED");
     expect(feedbackEvents.some((payload) => JSON.stringify(payload).includes("fp-expected-2"))).toBe(true);
   });
+
+  it.each(["during validation", "immediately before success"] as const)(
+    "requires revalidation when the workspace changes %s",
+    async (race) => {
+      const root = await createTempRepository();
+      await mkdir(join(root, "src"));
+      await mkdir(join(root, "tests"));
+      await writeFile(join(root, "src", "feature.ts"), "export const value = 2;\n", "utf8");
+      const clock = new SequenceClock();
+      const workspace = new FakeWorkspaceInspector();
+      if (race === "immediately before success") {
+        workspace.verifyPolicy = async () => {
+          workspace.diff += "+last-moment change\n";
+          return true;
+        };
+      }
+      const baseline = new MemoryBaselineService();
+      const policy = new PolicyEngine();
+      const llm = new ScriptedLLMClient([
+        { when: { call: 1, phase: "GENERATE_TESTS" }, action: { version: 1, id: "test", type: "create_file", rationale: "Add the target test.", path: "tests/feature.test.ts", content: "expect(value).toBe(2);\n" } },
+        { when: { call: 2, phase: "GENERATE_TESTS" }, action: { version: 1, id: "red", type: "run_validation", rationale: "Confirm red.", validator: "test" } },
+        { when: { call: 3, phase: "IMPLEMENT" }, action: { version: 1, id: "finish", type: "finish", rationale: "Validate.", summary: "Ready." } },
+      ]);
+      const orchestrator = new TaskOrchestrator({
+        taskStore: new TaskStore(root),
+        eventStore: new EventStore(root),
+        precheck: async () => repositoryProfile(root),
+        baseline,
+        policy,
+        registry: new ToolRegistry(policy, [
+          ...createFileTools({ workspaceRoot: root }),
+          validationTool(
+            [[validationResult("failed", "red")], [validationResult("passed", null)]],
+            async (index) => {
+              if (race === "during validation" && index === 1) workspace.diff += "+concurrent change\n";
+            },
+          ),
+        ]),
+        feedback: new FeedbackEngine({ now: clock.now, enabledValidators: ["test"] }),
+        llm,
+        confirmation: { confirmRed: async () => true },
+        workspace,
+        now: clock.now,
+      });
+
+      let state = await orchestrator.start({ id: `success-race-${race.replaceAll(" ", "-")}`, repositoryRoot: root, requirement: "Return value 2." });
+      for (let index = 0; index < 5; index += 1) state = await orchestrator.step(state.id);
+
+      expect(state.phase).toBe("FEEDBACK");
+      expect(state.finalValidation).toBeNull();
+    },
+  );
 });
 
 function patch(id: string, from: string, to: string) {

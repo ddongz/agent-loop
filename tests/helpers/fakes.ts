@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 
 import type { Action, Observation } from "../../src/domain/action.js";
-import type { ProtectedTestRef, TaskEvent } from "../../src/domain/task.js";
+import type { ProtectedTestRef, TaskEvent, TestBaseline as TestBaselineSnapshot } from "../../src/domain/task.js";
 import type { ValidationResult } from "../../src/domain/validation.js";
 import { TestBaseline } from "../../src/governance/test-baseline.js";
 import type { RepositoryProfile } from "../../src/repository/workspace.js";
@@ -19,6 +19,10 @@ export class MemoryBaselineService {
   readonly #baselines = new Map<string, TestBaseline>();
   freezeCalls = 0;
 
+  constructor(snapshots: Readonly<Record<string, TestBaselineSnapshot>> = {}) {
+    for (const [taskId, snapshot] of Object.entries(snapshots)) this.#baselines.set(taskId, TestBaseline.restore(snapshot));
+  }
+
   async freeze(taskId: string, input: { root: string; testPaths: readonly string[]; frozenDiff: string; confirmedAt: string }): Promise<{ protectedTests: readonly ProtectedTestRef[]; baselineVersion: number }> {
     this.freezeCalls += 1;
     const baseline = await TestBaseline.freeze(input);
@@ -29,6 +33,20 @@ export class MemoryBaselineService {
   async verify(taskId: string, input: { root: string; testPaths: readonly string[]; baselineVersion: number }): Promise<{ matches: boolean }> {
     const baseline = this.#baselines.get(taskId);
     return baseline === undefined ? { matches: false } : baseline.verify(input);
+  }
+
+  async approveMutation(taskId: string, input: { root: string; testPaths: readonly string[]; frozenDiff: string; approvedAt: string }): Promise<{ protectedTests: readonly ProtectedTestRef[]; baselineVersion: number }> {
+    const baseline = this.#baselines.get(taskId);
+    if (baseline === undefined) throw new Error(`Missing baseline for ${taskId}.`);
+    const approved = await baseline.approveMutation(input);
+    this.#baselines.set(taskId, approved);
+    return approved.taskStateSummary();
+  }
+
+  snapshot(taskId: string): TestBaselineSnapshot {
+    const baseline = this.#baselines.get(taskId);
+    if (baseline === undefined) throw new Error(`Missing baseline for ${taskId}.`);
+    return baseline.snapshot();
   }
 }
 
@@ -51,7 +69,7 @@ export function repositoryProfile(root: string): RepositoryProfile {
   };
 }
 
-export function validationTool(outputs: readonly ValidationResult[][]): Tool {
+export function validationTool(outputs: readonly ValidationResult[][], beforeExecute?: (index: number) => void | Promise<void>): Tool {
   let index = 0;
   return {
     type: "run_validation",
@@ -59,7 +77,9 @@ export function validationTool(outputs: readonly ValidationResult[][]): Tool {
     constraints: [],
     async execute(action: Action): Promise<Observation> {
       const timer = new ObservationTimer(action);
-      const output = outputs[index++];
+      const currentIndex = index++;
+      await beforeExecute?.(currentIndex);
+      const output = outputs[currentIndex];
       return output === undefined ? timer.fail(new Error("No scripted validation remains.")) : timer.succeed(JSON.stringify(output));
     },
   };

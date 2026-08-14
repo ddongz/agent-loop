@@ -1,10 +1,11 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import type { ValidationResult } from "../../../src/domain/validation.js";
 import { FeedbackEngine } from "../../../src/feedback/feedback-engine.js";
+import { ApprovalManager } from "../../../src/governance/approval.js";
 import { PolicyEngine } from "../../../src/governance/policy-engine.js";
 import { ScriptedLLMClient, type ScriptedStep } from "../../../src/llm/scripted-client.js";
 import type { LLMClient } from "../../../src/llm/types.js";
@@ -50,7 +51,13 @@ describe("TaskOrchestrator deterministic pause and resume", () => {
     expect(prechecks).toBe(1);
     const events = await fixture.eventStore.list(paused.id);
     expect(events.map(({ sequence }) => sequence)).toEqual(events.map((_, index) => index + 1));
-    expect(events.at(-1)?.type).toBe("TASK_RESUMED");
+    const pauseEvent = events.findLast(({ type }) => type === "TASK_PAUSED");
+    expect(events.at(-1)).toMatchObject({
+      type: "TASK_RESUMED",
+      phaseBefore: "PRECHECK",
+      phaseAfter: "FEEDBACK",
+      causationEventId: pauseEvent?.id,
+    });
   });
 
   it("pauses on a true two-state failure-set cycle", async () => {
@@ -88,6 +95,88 @@ describe("TaskOrchestrator deterministic pause and resume", () => {
     expect(state).toMatchObject({ phase: "PAUSED", resumePhase: "IMPLEMENT" });
     const events = await fixture.eventStore.list(state.id);
     expect(events.some(({ type }) => type === "USER_INTERRUPTED")).toBe(true);
+  });
+
+  it("restores approval in a fresh instance, executes the persisted action once and advances the baseline", async () => {
+    const root = await createTempRepository();
+    await mkdir(join(root, "src"));
+    await mkdir(join(root, "tests"));
+    await writeFile(join(root, "src", "feature.ts"), "export const value = 0;\n", "utf8");
+    const clock = new SequenceClock();
+    const workspace = new FakeWorkspaceInspector();
+    const originalBaseline = new MemoryBaselineService();
+    const taskStore = new TaskStore(root);
+    const eventStore = new EventStore(root);
+    const approvals = new ApprovalManager(clock.now);
+    const protectedPatch = {
+      version: 1 as const,
+      id: "approved-test-patch",
+      type: "apply_patch" as const,
+      rationale: "Update the protected expectation.",
+      path: "tests/feature.test.ts",
+      patch: "--- a/tests/feature.test.ts\n+++ b/tests/feature.test.ts\n@@ -1 +1 @@\n-expect(value).toBe(2);\n+expect(value).toBe(3);\n",
+    };
+    const scripts: ScriptedStep[] = [
+      { when: { call: 1, phase: "GENERATE_TESTS" }, action: { version: 1, id: "test", type: "create_file", rationale: "Add target test.", path: "tests/feature.test.ts", content: "expect(value).toBe(2);\n" } },
+      { when: { call: 2, phase: "GENERATE_TESTS" }, action: { version: 1, id: "red", type: "run_validation", rationale: "Confirm red.", validator: "test" } },
+      { when: { call: 3, phase: "IMPLEMENT" }, action: protectedPatch },
+    ];
+    const initialPolicy = new PolicyEngine();
+    const initial = new TaskOrchestrator({
+      taskStore,
+      eventStore,
+      precheck: async () => repositoryProfile(root),
+      baseline: originalBaseline,
+      policy: initialPolicy,
+      registry: new ToolRegistry(initialPolicy, [...createFileTools({ workspaceRoot: root }), validationTool([[validationResult("failed", "red")]])]),
+      feedback: new FeedbackEngine({ now: clock.now, enabledValidators: ["test"] }),
+      llm: new ScriptedLLMClient(scripts),
+      confirmation: { confirmRed: async () => true },
+      workspace,
+      approvals,
+      now: clock.now,
+    });
+    let state = await initial.start({ id: "approval-recovery", repositoryRoot: root, requirement: "Implement feature." });
+    for (let index = 0; index < 4; index += 1) state = await initial.step(state.id);
+    expect(state).toMatchObject({ phase: "AWAITING_APPROVAL", baselineVersion: 1, pendingApproval: { action: protectedPatch } });
+
+    const restoredBaseline = new MemoryBaselineService({ [state.id]: originalBaseline.snapshot(state.id) });
+    const restoredApprovals = new ApprovalManager(clock.now);
+    const restoredPolicy = new PolicyEngine();
+    const restored = new TaskOrchestrator({
+      taskStore: new TaskStore(root),
+      eventStore: new EventStore(root),
+      precheck: async () => repositoryProfile(root),
+      baseline: restoredBaseline,
+      policy: restoredPolicy,
+      registry: new ToolRegistry(restoredPolicy, createFileTools({ workspaceRoot: root })),
+      feedback: new FeedbackEngine({ now: clock.now, enabledValidators: ["test"] }),
+      llm: new ScriptedLLMClient([]),
+      confirmation: { confirmRed: async () => false },
+      workspace,
+      approvals: restoredApprovals,
+      now: clock.now,
+    });
+
+    state = await restored.resume(state.id, { approved: true });
+    expect(state).toMatchObject({ phase: "IMPLEMENT", pendingApproval: null, baselineVersion: 2 });
+    expect(await readFile(join(root, "tests", "feature.test.ts"), "utf8")).toBe("expect(value).toBe(3);\n");
+    await expect(restoredBaseline.verify(state.id, { root, testPaths: workspace.testPaths, baselineVersion: 2 }))
+      .resolves.toMatchObject({ matches: true });
+    const completions = (await eventStore.list(state.id)).filter((event) => event.type === "ACTION_COMPLETED" && event.actionId === protectedPatch.id);
+    expect(completions.filter((event) => JSON.stringify(event.payload).includes('"status":"succeeded"'))).toHaveLength(1);
+    const events = await eventStore.list(state.id);
+    const approvalRequest = events.find((event) => event.type === "APPROVAL_REQUESTED" && event.actionId === protectedPatch.id);
+    const approvalResolved = events.find((event) => event.type === "APPROVAL_RESOLVED" && event.actionId === protectedPatch.id);
+    expect(approvalResolved).toMatchObject({
+      phaseBefore: "AWAITING_APPROVAL",
+      phaseAfter: "IMPLEMENT",
+      causationEventId: approvalRequest?.id,
+    });
+    expect(events.find((event) => event.type === "PHASE_CHANGED" && event.phaseBefore === "AWAITING_APPROVAL")).toMatchObject({
+      phaseAfter: "IMPLEMENT",
+      causationEventId: approvalResolved?.id,
+    });
   });
 });
 

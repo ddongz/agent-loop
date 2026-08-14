@@ -46,6 +46,12 @@ interface BaselineService {
     testPaths: readonly string[];
     baselineVersion: number;
   }): Promise<{ matches: boolean }>;
+  approveMutation(taskId: string, input: {
+    root: string;
+    testPaths: readonly string[];
+    frozenDiff: string;
+    approvedAt: string;
+  }): Promise<{ protectedTests: readonly ProtectedTestRef[]; baselineVersion: number }>;
 }
 
 interface WorkspaceInspector {
@@ -54,8 +60,22 @@ interface WorkspaceInspector {
   verifyPolicy(root: string): Promise<boolean>;
 }
 
+export interface RedConfirmationInput {
+  taskId: string;
+  requirement: string;
+  testPaths: readonly string[];
+  testDiff: string;
+  failureSummary: string;
+  requirementToTests: readonly {
+    requirement: string;
+    testPath: string;
+    testNames: readonly string[];
+  }[];
+  results: readonly ValidationResult[];
+}
+
 interface ConfirmationIO {
-  confirmRed(input: { taskId: string; testPaths: readonly string[]; results: readonly ValidationResult[] }): Promise<boolean>;
+  confirmRed(input: RedConfirmationInput): Promise<boolean>;
 }
 
 interface FeedbackService {
@@ -102,11 +122,12 @@ export class TaskOrchestrator {
   async start(input: StartTaskInput): Promise<TaskState> {
     const requirement = input.requirement.trim();
     if (requirement.length === 0) throw new SentinelError({ code: "INVALID_INPUT", message: "Task requirement cannot be empty." });
+    const profile = await this.#deps.precheck(input.repositoryRoot);
     const createdAt = this.#now();
-    let state = TaskStateSchema.parse({
+    const state = TaskStateSchema.parse({
       schemaVersion: 1,
       id: input.id,
-      repositoryRoot: input.repositoryRoot,
+      repositoryRoot: profile.root,
       requirement,
       phase: "PRECHECK",
       resumePhase: null,
@@ -118,7 +139,7 @@ export class TaskOrchestrator {
         maxCostUsd: input.budget?.maxCostUsd ?? null,
       },
       usage: { iterations: 0, elapsedMs: 0, inputTokens: 0, outputTokens: 0, costUsd: null },
-      validationPlan: [],
+      validationPlan: profile.validationPlan,
       protectedTests: [],
       baselineVersion: 0,
       pendingApproval: null,
@@ -132,15 +153,6 @@ export class TaskOrchestrator {
     });
     await this.#deps.taskStore.create(state);
     await this.#event(state, "TASK_CREATED", null, "PRECHECK", null, null, null, {});
-
-    const profile = await this.#deps.precheck(input.repositoryRoot);
-    state = TaskStateSchema.parse({
-      ...state,
-      repositoryRoot: profile.root,
-      validationPlan: profile.validationPlan,
-      updatedAt: this.#now(),
-    });
-    await this.#deps.taskStore.save(state);
     return this.#move(state, "ANALYZE_REQUIREMENT");
   }
 
@@ -172,7 +184,9 @@ export class TaskOrchestrator {
   async #resumePaused(paused: TaskState): Promise<TaskState> {
     const resumePhase = paused.resumePhase;
     if (resumePhase === null) throw new SentinelError({ code: "STATE_CORRUPT", message: "Paused task has no resume phase." });
-    let state = await this.#move(paused, "PRECHECK");
+    const pauseEvent = (await this.#deps.eventStore.list(paused.id)).findLast((event) => event.type === "TASK_PAUSED");
+    if (pauseEvent === undefined) throw new SentinelError({ code: "STATE_CORRUPT", message: "Paused task has no persisted pause event." });
+    let state = await this.#move(paused, "PRECHECK", pauseEvent.id);
     const profile = await this.#deps.precheck(state.repositoryRoot);
     const testPaths = await this.#deps.workspace.listTestPaths(profile.root);
     const baselineVerified = state.baselineVersion === 0 || (await this.#deps.baseline.verify(state.id, {
@@ -193,8 +207,8 @@ export class TaskOrchestrator {
       updatedAt: this.#now(),
     });
     await this.#deps.taskStore.save(state);
-    const resumed = await this.#move(state, resumePhase);
-    await this.#event(resumed, "TASK_RESUMED", "PAUSED", resumePhase, null, null, null, {
+    const resumed = await this.#move(state, resumePhase, pauseEvent.id);
+    await this.#event(resumed, "TASK_RESUMED", "PRECHECK", resumePhase, null, null, pauseEvent.id, {
       iteration: resumed.iteration,
       usage: asJson(resumed.usage),
     });
@@ -205,14 +219,52 @@ export class TaskOrchestrator {
     const pending = state.pendingApproval;
     if (pending === null) throw new SentinelError({ code: "STATE_CORRUPT", message: "Approval state has no pending action." });
     if (approval === undefined) return state;
+    const approvalRequest = (await this.#deps.eventStore.list(state.id)).findLast((event) =>
+      event.type === "APPROVAL_REQUESTED" && event.actionId === pending.action.id);
+    if (approvalRequest === undefined) throw new SentinelError({ code: "STATE_CORRUPT", message: "Approval state has no persisted request event." });
+    const approvals = this.#deps.approvals;
+    if (approvals === undefined) throw new SentinelError({ code: "INVALID_CONFIG", message: "Approval recovery requires an approval service." });
     if (!approval.approved) {
-      this.#deps.approvals?.reject(pending.action.id, approval.reason);
-      const resolved = await this.#event(state, "APPROVAL_RESOLVED", "AWAITING_APPROVAL", "PAUSED", pending.action.id, null, null, { approved: false, reason: approval.reason });
+      resolvePersistedApproval(approvals, pending.action, pending.baselineVersion, { approved: false, reason: approval.reason });
+      const resolved = await this.#event(state, "APPROVAL_RESOLVED", "AWAITING_APPROVAL", "PAUSED", pending.action.id, null, approvalRequest.id, { approved: false, reason: approval.reason });
       return this.#pause(state, "APPROVAL_REJECTED", resolved.id);
     }
-    this.#deps.approvals?.approve(pending.action.id);
-    const resolved = await this.#event(state, "APPROVAL_RESOLVED", "AWAITING_APPROVAL", pending.resumePhase, pending.action.id, null, null, { approved: true });
-    return this.#move(state, pending.resumePhase, resolved.id);
+    resolvePersistedApproval(approvals, pending.action, pending.baselineVersion, { approved: true });
+    const resolved = await this.#event(state, "APPROVAL_RESOLVED", "AWAITING_APPROVAL", pending.resumePhase, pending.action.id, null, approvalRequest.id, { approved: true });
+    let resumed = await this.#move(state, pending.resumePhase, resolved.id);
+    const decision = await this.#deps.policy.evaluate(this.#policyContext(resumed), pending.action);
+    const originalRequest = (await this.#deps.eventStore.list(state.id)).findLast((event) =>
+      event.type === "ACTION_REQUESTED" && event.actionId === pending.action.id);
+    if (originalRequest === undefined) throw new SentinelError({ code: "STATE_CORRUPT", message: "Approval state has no persisted action request." });
+    const decided = await this.#event(resumed, "POLICY_DECIDED", resumed.phase, resumed.phase, pending.action.id, null, originalRequest.id, { decision: asJson(decision) });
+    const observation = await this.#deps.registry.dispatch(this.#dispatchContext(resumed), pending.action);
+    const completed = await this.#event(resumed, "ACTION_COMPLETED", resumed.phase, resumed.phase, pending.action.id, observation.actionId, decided.id, { observation: asJson(observation) });
+    if (observation.status !== "succeeded") return this.#pause(resumed, "APPROVED_ACTION_FAILED", completed.id);
+    if (pending.action.type === "create_file" || pending.action.type === "apply_patch") {
+      const testPaths = await this.#deps.workspace.listTestPaths(resumed.repositoryRoot);
+      const diff = await this.#deps.workspace.currentDiff(resumed.repositoryRoot);
+      const approvedAt = this.#now();
+      const baseline = await this.#deps.baseline.approveMutation(resumed.id, {
+        root: resumed.repositoryRoot,
+        testPaths,
+        frozenDiff: diff,
+        approvedAt,
+      });
+      resumed = TaskStateSchema.parse({
+        ...resumed,
+        protectedTests: baseline.protectedTests,
+        baselineVersion: baseline.baselineVersion,
+        lastCodeChangeAt: approvedAt,
+        updatedAt: this.#now(),
+      });
+      await this.#deps.taskStore.save(resumed);
+      await this.#event(resumed, "BASELINE_FROZEN", resumed.phase, resumed.phase, null, null, completed.id, {
+        approvedMutation: true,
+        baselineVersion: baseline.baselineVersion,
+        testPaths: [...testPaths],
+      });
+    }
+    return resumed;
   }
 
   async #generateTests(initial: TaskState): Promise<TaskState> {
@@ -240,8 +292,21 @@ export class TaskOrchestrator {
     const testPaths = await this.#deps.workspace.listTestPaths(state.repositoryRoot);
     const diff = await this.#deps.workspace.currentDiff(state.repositoryRoot);
     if (!isEligibleRed(results, testPaths, diff)) return this.#move(state, "GENERATE_TESTS", completed.id);
-    const confirmed = await this.#deps.confirmation.confirmRed({ taskId: state.id, testPaths, results });
+    const confirmed = await this.#deps.confirmation.confirmRed({
+      taskId: state.id,
+      requirement: state.requirement,
+      testPaths,
+      testDiff: diff,
+      failureSummary: redFailureSummary(results),
+      requirementToTests: requirementTestMapping(state.requirement, testPaths, results),
+      results,
+    });
     if (!confirmed) return this.#move(state, "GENERATE_TESTS", completed.id);
+    const confirmedTestPaths = await this.#deps.workspace.listTestPaths(state.repositoryRoot);
+    const confirmedDiff = await this.#deps.workspace.currentDiff(state.repositoryRoot);
+    if (!samePaths(testPaths, confirmedTestPaths) || hashDiff(diff) !== hashDiff(confirmedDiff)) {
+      return this.#move(state, "GENERATE_TESTS", completed.id);
+    }
 
     state = await this.#move(state, "FREEZE_TESTS", completed.id);
     const confirmedAt = this.#now();
@@ -308,6 +373,7 @@ export class TaskOrchestrator {
     const requested = await this.#event(initial, "ACTION_REQUESTED", "VALIDATE", "VALIDATE", action.id, null, null, { action: asJson(action) });
     const decision = await this.#deps.policy.evaluate(this.#policyContext(initial), action);
     const decided = await this.#event(initial, "POLICY_DECIDED", "VALIDATE", "VALIDATE", action.id, null, requested.id, { decision: asJson(decision) });
+    const validationStartDiff = await this.#deps.workspace.currentDiff(initial.repositoryRoot);
     const observation = await this.#deps.registry.dispatch(this.#dispatchContext(initial), action);
     const completed = await this.#event(initial, "ACTION_COMPLETED", "VALIDATE", "VALIDATE", action.id, observation.actionId, decided.id, { observation: asJson(observation) });
     const results = parseValidationResults(observation);
@@ -329,7 +395,7 @@ export class TaskOrchestrator {
     });
     const feedbackEvent = await this.#event(state, "FEEDBACK_CREATED", "VALIDATE", "VALIDATE", null, null, validationEvent.id, { feedback: asJson(feedback) });
 
-    if (feedback.decision === "REQUEST_SUCCESS_CHECK") return this.#success(state, results, diff, feedbackEvent.id);
+    if (feedback.decision === "REQUEST_SUCCESS_CHECK") return this.#success(state, results, validationStartDiff, diff, feedbackEvent.id);
     if (feedback.decision === "CONTINUE") return this.#move(state, "FEEDBACK", feedbackEvent.id);
     if (feedback.decision === "PAUSE_NO_PROGRESS" || feedback.decision === "PAUSE_BUDGET") {
       state = await this.#move(state, "FEEDBACK", feedbackEvent.id);
@@ -340,7 +406,14 @@ export class TaskOrchestrator {
     return failed;
   }
 
-  async #success(state: TaskState, results: readonly ValidationResult[], diff: string, causationEventId: string): Promise<TaskState> {
+  async #success(
+    state: TaskState,
+    results: readonly ValidationResult[],
+    validationStartDiff: string,
+    validationEndDiff: string,
+    causationEventId: string,
+  ): Promise<TaskState> {
+    if (hashDiff(validationStartDiff) !== hashDiff(validationEndDiff)) return this.#move(state, "FEEDBACK", causationEventId);
     const testPaths = await this.#deps.workspace.listTestPaths(state.repositoryRoot);
     const baseline = await this.#deps.baseline.verify(state.id, {
       root: state.repositoryRoot,
@@ -348,6 +421,8 @@ export class TaskOrchestrator {
       baselineVersion: state.baselineVersion,
     });
     const workspacePolicyVerified = await this.#deps.workspace.verifyPolicy(state.repositoryRoot);
+    const transitionDiff = await this.#deps.workspace.currentDiff(state.repositoryRoot);
+    if (hashDiff(validationEndDiff) !== hashDiff(transitionDiff)) return this.#move(state, "FEEDBACK", causationEventId);
     if (!baseline.matches || !workspacePolicyVerified || state.pendingApproval !== null) {
       const feedbackState = await this.#move(state, "FEEDBACK", causationEventId);
       return this.#pause(feedbackState, "SUCCESS_GATE_REJECTED", causationEventId);
@@ -360,7 +435,7 @@ export class TaskOrchestrator {
         results,
         baselineVerified: true,
         workspacePolicyVerified: true,
-        codeVersion: hashDiff(diff),
+        codeVersion: hashDiff(transitionDiff),
         completedAt,
       },
       updatedAt: completedAt,
@@ -464,6 +539,33 @@ export class TaskOrchestrator {
   }
 }
 
+function redFailureSummary(results: readonly ValidationResult[]): string {
+  return results.flatMap((result) => result.issues.map((issue) => {
+    const location = `${issue.file ?? "unknown"}:${issue.line ?? 0}:${issue.column ?? 0}`;
+    return `${result.validator}:${result.status} ${issue.category} ${issue.message} [${location} ${issue.testName ?? "unknown"}]`;
+  })).join("\n");
+}
+
+function requirementTestMapping(
+  requirement: string,
+  testPaths: readonly string[],
+  results: readonly ValidationResult[],
+): RedConfirmationInput["requirementToTests"] {
+  return [...testPaths].sort((left, right) => left.localeCompare(right, "en")).map((testPath) => ({
+    requirement,
+    testPath,
+    testNames: [...new Set(results.flatMap(({ issues }) => issues
+      .filter((issue) => issue.file !== null && normalizePath(issue.file) === normalizePath(testPath) && issue.testName !== null)
+      .map((issue) => issue.testName as string)))].sort((left, right) => left.localeCompare(right, "en")),
+  }));
+}
+
+function samePaths(left: readonly string[], right: readonly string[]): boolean {
+  const normalizedLeft = [...left].map(normalizePath).sort((a, b) => a.localeCompare(b, "en"));
+  const normalizedRight = [...right].map(normalizePath).sort((a, b) => a.localeCompare(b, "en"));
+  return normalizedLeft.length === normalizedRight.length && normalizedLeft.every((path, index) => path === normalizedRight[index]);
+}
+
 function parseValidationResults(observation: Observation): ValidationResult[] {
   if (observation.status !== "succeeded") return [];
   try {
@@ -526,6 +628,25 @@ function controlObservation(action: Action, allowed: boolean, startedAt: string)
     truncated: false,
     error: allowed ? null : new SentinelError({ code: "POLICY_DENIED", message: "Policy denied finish." }).toJSON((value) => value),
   };
+}
+
+function resolvePersistedApproval(
+  approvals: ApprovalService,
+  action: Action,
+  baselineVersion: number,
+  resolution: ApprovalResolution,
+): void {
+  const resolve = (): void => {
+    if (resolution.approved) approvals.approve(action.id);
+    else approvals.reject(action.id, resolution.reason);
+  };
+  try {
+    resolve();
+  } catch (error) {
+    if (!(error instanceof SentinelError) || error.code !== "INVALID_INPUT") throw error;
+    approvals.request(action, baselineVersion);
+    resolve();
+  }
 }
 
 function isInterruption(error: unknown): boolean {
