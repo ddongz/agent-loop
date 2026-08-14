@@ -8,12 +8,15 @@ describe("feedback causality mechanism demo", () => {
 
     expect(result).toMatchObject({
       refusalCode: "SCRIPT_NO_MATCH",
-      expectedFingerprint: "fp-expected-2",
       repairAction: "repair",
+      precheckPackageManager: "npm",
+      validationExitCodes: [1, 1, 0],
+      finalSource: "export const value: number = 2;\n",
       finalState: "SUCCEEDED",
       finalDecision: "REQUEST_SUCCESS_CHECK",
       passed: true,
     });
-    expect(result.repairContextFingerprints).toContain("fp-expected-2");
+    expect(result.expectedFingerprint).toMatch(/^[0-9a-f]{64}$/);
+    expect(result.repairContextFingerprints).toContain(result.expectedFingerprint);
   });
 });
