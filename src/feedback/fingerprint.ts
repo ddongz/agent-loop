@@ -45,7 +45,14 @@ export function normalizePath(value: string | null): string | null {
   if (value === null || value.trim() === "") return null;
   let normalized = sanitizeText(value).replace(/^file:\/\//i, "").replaceAll("\\", "/");
   normalized = normalized.replace(/\/{2,}/g, "/");
+  normalized = normalized.replace(/^(?:(?:[a-z]:)?\/Users\/[^/]+\/AppData\/Local\/Temp|\/(?:var\/)?tmp)\/[^/]+\//i, "");
   const lower = normalized.toLowerCase();
+  for (const anchor of ["packages", "apps"]) {
+    const marker = `/${anchor}/`;
+    const index = lower.lastIndexOf(marker);
+    if (index >= 0) return normalized.slice(index + 1);
+    if (lower.startsWith(`${anchor}/`)) return normalized;
+  }
   for (const anchor of repositoryAnchors) {
     const marker = `/${anchor.toLowerCase()}/`;
     const index = lower.lastIndexOf(marker);
@@ -61,6 +68,9 @@ export function normalizePath(value: string | null): string | null {
 export function normalizeMessage(value: string): string {
   let normalized = sanitizeText(value)
     .replace(/[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}/gi, "<id>")
+    .replace(/\bpid\s*[:=]?\s*\d+\b/gi, "pid <id>")
+    .replace(/\b((?:request|run|trace|correlation)(?:\s+id)?)\s*[:=]?\s*[a-z0-9_-]{12,}\b/gi, "$1 <id>")
+    .replace(/\b[0-9a-f]{32,}\b/gi, "<hash>")
     .replace(/\b(?:line\s*)\d+\b/gi, "line <position>")
     .replace(/\b(?:column|col)\s*\d+\b/gi, "column <position>")
     .replace(/:\d+(?::\d+)?\b/g, ":<position>")

@@ -56,4 +56,58 @@ describe("detectProgress", () => {
       snapshot("test", ["a", "b"]), snapshot("test", ["b", "a"]),
     ])).toEqual({ kind: "unchanged", repeated: ["a", "b"] });
   });
+
+  it("evaluates stage advancement before a repeating fingerprint cycle", () => {
+    expect(detectProgress([
+      snapshot("test", ["a"]), snapshot("typecheck", ["b"]),
+      snapshot("test", ["a"]), snapshot("typecheck", ["b"]),
+    ])).toMatchObject({ kind: "improved" });
+  });
+
+  it("evaluates validator status improvement before oscillation", () => {
+    const statusSnapshot = (status: ValidationResult["status"]): ProgressSnapshot => ({
+      results: [result("test", status, ["a"])], diff: "same",
+    });
+
+    expect(detectProgress([
+      statusSnapshot("infrastructure_error"), statusSnapshot("failed"),
+      statusSnapshot("infrastructure_error"), statusSnapshot("failed"),
+    ])).toMatchObject({ kind: "improved" });
+  });
+
+  it("evaluates de-duplicated severity improvement before oscillation", () => {
+    const severitySnapshot = (severity: ValidationIssue["severity"], duplicates = 1): ProgressSnapshot => ({
+      results: [{ ...result("test", "failed", []), issues: Array.from({ length: duplicates }, () => issue("a", severity)) }],
+      diff: "same",
+    });
+
+    expect(detectProgress([
+      severitySnapshot("error"), severitySnapshot("warning"),
+      severitySnapshot("error", 2), severitySnapshot("warning", 3),
+    ])).toMatchObject({ kind: "improved" });
+  });
+
+  it("normalizes volatile diff headers but distinguishes meaningful code changes", () => {
+    const first = snapshot("test", ["a"], "index abc123..def456 100644\n@@ -1,2 +4,2 @@\n-const value = 0;\n+const value = 1;");
+    const same = snapshot("test", ["a"], "index 111111..999999 100644\n@@ -90,2 +120,2 @@\n-const value = 0;\n+const value = 1;");
+    const changed = snapshot("test", ["a"], "index 222222..888888 100644\n@@ -3 +7 @@\n-const value = 1;\n+const value = 2;");
+
+    expect(detectProgress([first, same])).toMatchObject({ kind: "unchanged" });
+    expect(detectProgress([first, same, changed]).kind).not.toBe("unchanged");
+  });
+
+  it("normalizes Windows and Unix temporary roots in diff file headers", () => {
+    const windows = snapshot("test", ["a"], [
+      "--- C:\\Users\\runner\\AppData\\Local\\Temp\\run-123\\packages\\pkg1\\src\\a.ts",
+      "+++ C:\\Users\\runner\\AppData\\Local\\Temp\\run-123\\packages\\pkg1\\src\\a.ts",
+      "+const value = 1;",
+    ].join("\n"));
+    const unix = snapshot("test", ["a"], [
+      "--- /tmp/run-999/packages/pkg1/src/a.ts",
+      "+++ /tmp/run-999/packages/pkg1/src/a.ts",
+      "+const value = 1;",
+    ].join("\n"));
+
+    expect(detectProgress([windows, unix])).toMatchObject({ kind: "unchanged" });
+  });
 });

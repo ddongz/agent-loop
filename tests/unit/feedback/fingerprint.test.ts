@@ -44,4 +44,24 @@ describe("fingerprint", () => {
 
     expect(secret).toBe(clean);
   });
+
+  it("normalizes volatile temp-run prefixes while preserving semantic suffixes", () => {
+    const linux = fingerprint(issue({ file: "/tmp/vitest-run-123/packages/pkg1/src/output.ts" }));
+    const windows = fingerprint(issue({ file: "C:\\Users\\runner\\AppData\\Local\\Temp\\vitest-run-999\\packages\\pkg1\\src\\output.ts" }));
+    const otherPackage = fingerprint(issue({ file: "/tmp/vitest-run-456/packages/pkg2/src/output.ts" }));
+
+    expect(windows).toBe(linux);
+    expect(otherPackage).not.toBe(linux);
+  });
+
+  it("normalizes PID, random IDs, and long hashes in failure messages", () => {
+    const first = fingerprint(issue({
+      message: "worker pid 1234 request id run_a8b7c6d5e4f3210 hash aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa failed",
+    }));
+    const second = fingerprint(issue({
+      message: "worker pid 9876 request id run_1234567890abcdef hash bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb failed",
+    }));
+
+    expect(second).toBe(first);
+  });
 });

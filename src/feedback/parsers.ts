@@ -7,6 +7,7 @@ import type {
 import { fingerprint, normalizeMessage, normalizePath, sanitizeText } from "./fingerprint.js";
 
 const summaryLimitBytes = 2_048;
+const issueLimit = 100;
 const epoch = "1970-01-01T00:00:00.000Z";
 
 export interface ParseValidationMetadata {
@@ -31,11 +32,16 @@ export function parseValidation(
     const inherited = typeof raw === "string" ? undefined : raw;
     const validator = metadata.validator ?? inherited?.validator ?? inferValidator(clean);
     const exitCode = metadata.exitCode !== undefined ? metadata.exitCode : inherited !== undefined ? inherited.exitCode : 1;
-    const status = determineStatus(exitCode, inherited?.status, clean);
-    const drafts = status === "passed" ? [] : status === "infrastructure_error"
+    const initialStatus = determineStatus(exitCode, inherited?.status, clean);
+    const drafts = initialStatus === "passed" ? [] : initialStatus === "infrastructure_error"
       ? [infrastructureIssue(clean)]
       : parseIssues(clean, validator);
+    const status = initialStatus !== "passed" && drafts.some(({ category }) => category === "INFRASTRUCTURE_ERROR")
+      ? "infrastructure_error"
+      : initialStatus;
     const issues = deduplicateAndSort(drafts.map((draft) => withFingerprint(draft, validator)));
+    const stdoutSource = inherited?.stdoutSummary ?? "";
+    const stderrSource = inherited?.stderrSummary ?? clean;
 
     return {
       validator,
@@ -45,10 +51,10 @@ export function parseValidation(
       startedAt: metadata.startedAt ?? inherited?.startedAt ?? epoch,
       durationMs: metadata.durationMs ?? inherited?.durationMs ?? 0,
       issues,
-      stdoutSummary: bounded(inherited?.stdoutSummary ?? "", summaryLimitBytes),
-      stderrSummary: bounded(inherited?.stderrSummary ?? clean, summaryLimitBytes),
-      stdoutTruncated: metadata.stdoutTruncated ?? inherited?.stdoutTruncated ?? false,
-      stderrTruncated: metadata.stderrTruncated ?? inherited?.stderrTruncated ?? Buffer.byteLength(clean, "utf8") > summaryLimitBytes,
+      stdoutSummary: bounded(stdoutSource, summaryLimitBytes),
+      stderrSummary: bounded(stderrSource, summaryLimitBytes),
+      stdoutTruncated: (metadata.stdoutTruncated ?? inherited?.stdoutTruncated ?? false) || exceedsLimit(stdoutSource),
+      stderrTruncated: (metadata.stderrTruncated ?? inherited?.stderrTruncated ?? false) || exceedsLimit(stderrSource),
     };
   } catch {
     const clean = sanitizeText(typeof raw === "string" ? raw : `${raw.stdoutSummary}\n${raw.stderrSummary}`);
@@ -76,7 +82,8 @@ function determineStatus(
   clean: string,
 ): ValidationResult["status"] {
   if (exitCode === null || inherited === "infrastructure_error" || isInfrastructureOutput(clean)) return "infrastructure_error";
-  if (exitCode === 0 || inherited === "passed") return "passed";
+  if (inherited === "failed" || exitCode !== 0) return "failed";
+  if (exitCode === 0) return "passed";
   return "failed";
 }
 
@@ -136,6 +143,14 @@ function parseTestJson(testResults: unknown[]): DraftIssue[] {
   for (const testResult of testResults) {
     if (!isRecord(testResult) || !Array.isArray(testResult.assertionResults)) continue;
     const file = typeof testResult.name === "string" ? testResult.name : null;
+    const testExecutionError = isRecord(testResult.testExecError) && typeof testResult.testExecError.message === "string"
+      ? testResult.testExecError.message
+      : null;
+    const executionError = testExecutionError
+      ?? (testResult.assertionResults.length === 0 && typeof testResult.failureMessage === "string" ? testResult.failureMessage : null);
+    if (executionError !== null) {
+      issues.push(draft({ category: classifyTestEvidence(executionError), message: executionError, file }));
+    }
     for (const assertion of testResult.assertionResults) {
       if (!isRecord(assertion) || assertion.status !== "failed") continue;
       const ancestors = Array.isArray(assertion.ancestorTitles)
@@ -147,7 +162,7 @@ function parseTestJson(testResults: unknown[]): DraftIssue[] {
         : [];
       const location = isRecord(assertion.location) ? assertion.location : {};
       issues.push(draft({
-        category: "TEST_ASSERTION",
+        category: classifyTestEvidence(failureMessages[0] ?? "Test failed."),
         message: failureMessages[0] ?? `Test failed: ${[...ancestors, title].join(" > ")}`,
         file,
         line: integerOrNull(location.line),
@@ -201,30 +216,35 @@ function parseEslintText(raw: string): DraftIssue[] {
 }
 
 function parseTestText(raw: string): DraftIssue[] {
-  const vitest = raw.match(/^\s*FAIL\s+(.+?)\s+>\s+(.+?)(?:\s+\d+(?:\.\d+)?\s*ms)?\s*$/im);
-  if (vitest !== null) {
-    const location = findLocation(raw, vitest[1] ?? null);
-    return [draft({
-      category: testCategory(raw),
-      message: assertionMessage(raw),
-      file: location.file ?? vitest[1] ?? null,
-      line: location.line,
-      column: location.column,
-      testName: (vitest[2] ?? "unknown test").trim(),
-    })];
+  const vitestMatches = Array.from(raw.matchAll(/^\s*FAIL\s+(.+?)\s+>\s+(.+?)(?:\s+\d+(?:\.\d+)?\s*ms)?\s*$/gim));
+  if (vitestMatches.length > 0) {
+    return vitestMatches.map((match, index) => {
+      const start = match.index ?? 0;
+      const end = vitestMatches[index + 1]?.index ?? raw.length;
+      const block = raw.slice(start, end);
+      const location = findLocation(block, match[1] ?? null);
+      return draft({
+        category: testCategory(block), message: assertionMessage(block),
+        file: location.file ?? match[1] ?? null, line: location.line, column: location.column,
+        testName: (match[2] ?? "unknown test").trim(),
+      });
+    });
   }
-  const jestFile = raw.match(/^\s*FAIL\s+(.+?)\s*$/im);
-  const jestName = raw.match(/^\s*●\s+(.+?)\s*$/m);
-  if (jestFile !== null || jestName !== null) {
-    const location = findLocation(raw, jestFile?.[1] ?? null);
-    return [draft({
-      category: testCategory(raw),
-      message: assertionMessage(raw),
-      file: location.file ?? jestFile?.[1] ?? null,
-      line: location.line,
-      column: location.column,
-      testName: jestName?.[1]?.replaceAll("›", ">").replace(/\s*>\s*/g, " > ") ?? "unknown test",
-    })];
+  const jestMatches = Array.from(raw.matchAll(/^\s*●\s+(.+?)\s*$/gm));
+  if (jestMatches.length > 0) {
+    return jestMatches.map((match, index) => {
+      const start = match.index ?? 0;
+      const end = jestMatches[index + 1]?.index ?? raw.length;
+      const block = raw.slice(start, end);
+      const preceding = raw.slice(0, start).match(/^\s*FAIL\s+(.+?)\s*$/gim)?.at(-1);
+      const file = preceding?.replace(/^\s*FAIL\s+/i, "").trim() ?? null;
+      const location = findLocation(block, file);
+      return draft({
+        category: testCategory(block), message: assertionMessage(block),
+        file: location.file ?? file, line: location.line, column: location.column,
+        testName: (match[1] ?? "unknown test").replaceAll("›", ">").replace(/\s*>\s*/g, " > "),
+      });
+    });
   }
   return [];
 }
@@ -250,6 +270,7 @@ function assertionMessage(raw: string): string {
 }
 
 function testCategory(raw: string): ValidationIssueCategory {
+  if (isTimeoutEvidence(raw)) return "TIMEOUT";
   if (/no tests found|test files? not found|failed to discover/i.test(raw)) return "TEST_DISCOVERY";
   if (/syntaxerror|parse error|unexpected token/i.test(raw)) return "SYNTAX_ERROR";
   if (/assertionerror|expected|received|expect\(/i.test(raw)) return "TEST_ASSERTION";
@@ -288,7 +309,7 @@ function withFingerprint(issue: DraftIssue, validator: ValidatorName): Validatio
 function deduplicateAndSort(issues: ValidationIssue[]): ValidationIssue[] {
   const unique = new Map<string, ValidationIssue>();
   for (const issue of issues) if (!unique.has(issue.fingerprint)) unique.set(issue.fingerprint, issue);
-  return [...unique.values()].sort((left, right) => issueKey(left).localeCompare(issueKey(right), "en"));
+  return [...unique.values()].sort((left, right) => issueKey(left).localeCompare(issueKey(right), "en")).slice(0, issueLimit);
 }
 
 function issueKey(issue: ValidationIssue): string {
@@ -304,6 +325,23 @@ function inferValidator(raw: string): ValidatorName {
 
 function isInfrastructureOutput(raw: string): boolean {
   return /\b(?:spawn\s+ENOENT|command not found|could not be started|infrastructure failure)\b/i.test(raw);
+}
+
+function classifyTestEvidence(message: string): ValidationIssueCategory {
+  if (isTimeoutEvidence(message)) return "TIMEOUT";
+  if (isInfrastructureOutput(message) || /\b(?:worker|process)\s+(?:crashed|exited)|\b(?:ENOMEM|segmentation fault)\b/i.test(message)) return "INFRASTRUCTURE_ERROR";
+  if (/no tests found|test files? not found|failed to discover|cannot find test/i.test(message)) return "TEST_DISCOVERY";
+  if (/syntaxerror|parse error|unexpected token/i.test(message)) return "SYNTAX_ERROR";
+  if (/assertionerror|expected|received|expect\(/i.test(message)) return "TEST_ASSERTION";
+  return "TEST_RUNTIME";
+}
+
+function isTimeoutEvidence(message: string): boolean {
+  return /\b(?:test|hook|operation)\s+(?:timed out|timeout)\b|\b(?:timed out|exceeded timeout(?:\s+of)?|aborted due to timeout)\b/i.test(message);
+}
+
+function exceedsLimit(value: string): boolean {
+  return Buffer.byteLength(sanitizeText(value), "utf8") > summaryLimitBytes;
 }
 
 function bounded(value: string, limit: number): string {

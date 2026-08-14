@@ -1,4 +1,7 @@
+import { createHash } from "node:crypto";
+
 import type { Progress, ValidationResult, ValidatorName } from "../domain/validation.js";
+import { normalizePath } from "./fingerprint.js";
 
 export interface ProgressSnapshot {
   results: readonly ValidationResult[];
@@ -9,10 +12,6 @@ const validatorOrder: readonly ValidatorName[] = ["test", "typecheck", "lint", "
 
 export function detectProgress(history: readonly ProgressSnapshot[]): Progress {
   if (history.length === 0) return { kind: "unchanged", repeated: [] };
-  const canonicalHistory = history.map(canonicalFailureSet);
-  const cycleLength = detectCycle(canonicalHistory);
-  if (cycleLength !== null) return { kind: "oscillating", cycleLength };
-
   const current = history.at(-1) as ProgressSnapshot;
   const previous = history.at(-2);
   const currentSet = fingerprintSet(current);
@@ -33,7 +32,12 @@ export function detectProgress(history: readonly ProgressSnapshot[]): Progress {
   if (severityComparison > 0) return { kind: "improved", resolved, introduced };
   if (severityComparison < 0) return { kind: "regressed", introduced };
 
+  const canonicalHistory = history.map(canonicalFailureSet);
+  const cycleLength = detectCycle(canonicalHistory);
+  if (cycleLength !== null) return { kind: "oscillating", cycleLength };
+
   if (resolved.length === 0 && introduced.length === 0) {
+    if (diffSignal(current.diff) !== diffSignal(previous.diff)) return { kind: "improved", resolved: [], introduced: [] };
     return { kind: "unchanged", repeated: [...currentSet] };
   }
   if (introduced.length === 0 || resolved.length > introduced.length) {
@@ -43,7 +47,13 @@ export function detectProgress(history: readonly ProgressSnapshot[]): Progress {
 }
 
 export function canonicalFailureSet(snapshot: ProgressSnapshot): string {
-  return JSON.stringify([...fingerprintSet(snapshot)]);
+  return JSON.stringify({
+    stage: stageRank(snapshot),
+    statuses: normalizedStatuses(snapshot),
+    severities: normalizedSeverities(snapshot),
+    fingerprints: fingerprintSet(snapshot),
+    diff: diffSignal(snapshot.diff),
+  });
 }
 
 export function hasUnchangedStreak(history: readonly ProgressSnapshot[], length = 3): boolean {
@@ -81,13 +91,52 @@ function stageRank(snapshot: ProgressSnapshot): number {
 
 function statusScore(snapshot: ProgressSnapshot): number {
   const scores: Record<ValidationResult["status"], number> = { infrastructure_error: 0, failed: 1, passed: 2 };
-  return snapshot.results.reduce((sum, result) => sum + scores[result.status], 0);
+  return normalizedStatuses(snapshot).reduce((sum, [, status]) => sum + scores[status], 0);
 }
 
 function severityScore(snapshot: ProgressSnapshot): number {
+  return normalizedSeverities(snapshot).reduce((sum, [, severity]) => sum + severity, 0);
+}
+
+function normalizedStatuses(snapshot: ProgressSnapshot): [ValidatorName, ValidationResult["status"]][] {
+  const scores: Record<ValidationResult["status"], number> = { infrastructure_error: 0, failed: 1, passed: 2 };
+  const statuses = new Map<ValidatorName, ValidationResult["status"]>();
+  for (const result of snapshot.results) {
+    const current = statuses.get(result.validator);
+    if (current === undefined || scores[result.status] < scores[current]) statuses.set(result.validator, result.status);
+  }
+  return validatorOrder.flatMap((validator) => {
+    const status = statuses.get(validator);
+    return status === undefined ? [] : [[validator, status] as [ValidatorName, ValidationResult["status"]]];
+  });
+}
+
+function normalizedSeverities(snapshot: ProgressSnapshot): [string, number][] {
   const severities = new Map<string, number>();
   for (const issue of snapshot.results.flatMap(({ issues }) => issues)) {
     severities.set(issue.fingerprint, Math.max(severities.get(issue.fingerprint) ?? 0, issue.severity === "error" ? 2 : 1));
   }
-  return [...severities.values()].reduce((sum, severity) => sum + severity, 0);
+  return [...severities.entries()].sort(([left], [right]) => left.localeCompare(right, "en"));
+}
+
+function diffSignal(diff: string): string | null {
+  const normalized = diff
+    .replaceAll("\r\n", "\n")
+    .replaceAll("\r", "\n")
+    .split("\n")
+    .filter((line) => line !== "\\ No newline at end of file")
+    .map((line) => normalizeDiffHeader(line)
+      .replace(/^index\s+[0-9a-f]+\.\.[0-9a-f]+(?:\s+\d+)?$/i, "index <content>")
+      .replace(/^@@\s+-\d+(?:,\d+)?\s+\+\d+(?:,\d+)?\s+@@/, "@@")
+      .replace(/^((?:---|\+\+)\s+\S+)\t.*$/, "$1"))
+    .join("\n")
+    .trim();
+  if (normalized === "") return null;
+  return createHash("sha256").update(normalized, "utf8").digest("hex");
+}
+
+function normalizeDiffHeader(line: string): string {
+  const match = line.match(/^(---|\+\+\+)\s+(.+?)(?:\t.*)?$/);
+  if (match === null) return line;
+  return `${match[1]} ${normalizePath(match[2] ?? null) ?? "/dev/null"}`;
 }

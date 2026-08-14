@@ -31,6 +31,7 @@ export interface FeedbackBudget {
 export interface FeedbackEngineOptions {
   now?: () => string;
   budget?: FeedbackBudget;
+  enabledValidators?: readonly ValidatorName[];
 }
 
 export type FeedbackDecision = Feedback;
@@ -38,10 +39,16 @@ export type FeedbackDecision = Feedback;
 export class FeedbackEngine {
   readonly #now: () => string;
   readonly #budget: Required<Pick<FeedbackBudget, "maxIterations">> & Omit<FeedbackBudget, "maxIterations">;
+  readonly #enabledValidators: readonly ValidatorName[];
 
   constructor(options: FeedbackEngineOptions = {}) {
     this.#now = options.now ?? (() => new Date().toISOString());
     this.#budget = { maxIterations: options.budget?.maxIterations ?? 8, ...options.budget };
+    const enabled = options.enabledValidators ?? validatorOrder;
+    if (enabled.length === 0) throw new Error("At least one enabled validator is required.");
+    if (new Set(enabled).size !== enabled.length) throw new Error("Enabled validators cannot contain duplicates.");
+    if (enabled.some((validator) => !validatorOrder.includes(validator))) throw new Error("Enabled validator is not supported.");
+    this.#enabledValidators = [...enabled];
   }
 
   evaluate(
@@ -92,7 +99,7 @@ export class FeedbackEngine {
     if (results.some((result) => result.status === "infrastructure_error" || result.issues.some(({ category }) => category === "INFRASTRUCTURE_ERROR"))) {
       return "FAIL_INFRASTRUCTURE";
     }
-    if (results.length > 0 && results.every(({ status }) => status === "passed")) return "REQUEST_SUCCESS_CHECK";
+    if (isExactSuccess(results, this.#enabledValidators)) return "REQUEST_SUCCESS_CHECK";
     if (budgetExhausted(this.#budget, usage)) return "PAUSE_BUDGET";
     const progress = snapshots.length > 1 ? detectProgress(snapshots) : null;
     if (progress?.kind === "oscillating" || hasUnchangedStreak(snapshots, 3)) return "PAUSE_NO_PROGRESS";
@@ -170,7 +177,10 @@ function sanitizedResults(results: readonly ValidationResult[], issues: Validati
   return results.map((result) => ({
     ...result,
     command: { executable: sanitizeText(result.command.executable), args: result.command.args.map(sanitizeText) },
-    issues: result.issues.map((issue) => byFingerprint.get(sanitizeText(issue.fingerprint)) ?? sanitizeIssue(issue)),
+    issues: result.issues.flatMap((issue) => {
+      const retained = byFingerprint.get(sanitizeText(issue.fingerprint));
+      return retained === undefined ? [] : [retained];
+    }),
     stdoutSummary: sanitizeText(result.stdoutSummary),
     stderrSummary: sanitizeText(result.stderrSummary),
   }));
@@ -182,7 +192,7 @@ function sanitizeIssues(issues: readonly ValidationIssue[]): ValidationIssue[] {
     const sanitized = sanitizeIssue(issue);
     if (!unique.has(sanitized.fingerprint)) unique.set(sanitized.fingerprint, sanitized);
   }
-  return [...unique.values()].sort((left, right) => left.fingerprint.localeCompare(right.fingerprint, "en"));
+  return [...unique.values()].sort((left, right) => left.fingerprint.localeCompare(right.fingerprint, "en")).slice(0, 100);
 }
 
 function sanitizeIssue(issue: ValidationIssue): ValidationIssue {
@@ -230,4 +240,10 @@ function bounded(value: string, limit: number): string {
     result += character;
   }
   return result;
+}
+
+function isExactSuccess(results: readonly ValidationResult[], enabled: readonly ValidatorName[]): boolean {
+  if (results.length !== enabled.length || results.some(({ status, issues }) => status !== "passed" || issues.length > 0)) return false;
+  const validators = results.map(({ validator }) => validator);
+  return new Set(validators).size === validators.length && enabled.every((validator) => validators.includes(validator));
 }

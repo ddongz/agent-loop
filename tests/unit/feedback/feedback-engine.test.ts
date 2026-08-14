@@ -30,6 +30,22 @@ describe("FeedbackEngine", () => {
     expect(feedback).toMatchObject({ decision: "REQUEST_SUCCESS_CHECK", currentStage: null, remainingIterations: 5 });
   });
 
+  it("requires exactly one issue-free result for each authoritative enabled validator", () => {
+    const all = [result("test", "passed"), result("typecheck", "passed"), result("lint", "passed"), result("build", "passed")];
+    const enabledTestOnly = new FeedbackEngine({ now, enabledValidators: ["test"] });
+
+    expect(new FeedbackEngine({ now }).evaluate(all.slice(0, 3), [], "").decision).not.toBe("REQUEST_SUCCESS_CHECK");
+    expect(new FeedbackEngine({ now }).evaluate([...all, result("test", "passed")], [], "").decision).not.toBe("REQUEST_SUCCESS_CHECK");
+    expect(enabledTestOnly.evaluate([result("test", "passed"), result("typecheck", "passed")], [], "").decision).not.toBe("REQUEST_SUCCESS_CHECK");
+    expect(enabledTestOnly.evaluate([result("test", "passed", [issue("unexpected")])], [], "").decision).not.toBe("REQUEST_SUCCESS_CHECK");
+    expect(enabledTestOnly.evaluate([result("test", "passed")], [], "").decision).toBe("REQUEST_SUCCESS_CHECK");
+  });
+
+  it("rejects an empty or duplicate enabled-validator configuration", () => {
+    expect(() => new FeedbackEngine({ enabledValidators: [] })).toThrow(/enabled validator/i);
+    expect(() => new FeedbackEngine({ enabledValidators: ["test", "test"] })).toThrow(/duplicate/i);
+  });
+
   it("keeps infrastructure failure separate from actionable code feedback", () => {
     const feedback = new FeedbackEngine({ now }).evaluate([
       result("test", "infrastructure_error", [issue("infra", "spawn ENOENT", "INFRASTRUCTURE_ERROR")]),
@@ -56,27 +72,29 @@ describe("FeedbackEngine", () => {
   it("pauses exactly on the third unchanged fingerprint set", () => {
     const engine = new FeedbackEngine({ now });
     const current = [result("test", "failed", [issue("same")])];
+    const unchangedDiff = "diff --git a/src/a.ts b/src/a.ts";
 
-    expect(engine.evaluate(current, [entry(["same"])], "", { iterations: 2 }).decision).toBe("CONTINUE");
-    expect(engine.evaluate(current, [entry(["same"]), entry(["same"])], "", { iterations: 3 })).toMatchObject({
+    expect(engine.evaluate(current, [entry(["same"])], unchangedDiff, { iterations: 2 }).decision).toBe("CONTINUE");
+    expect(engine.evaluate(current, [entry(["same"]), entry(["same"])], unchangedDiff, { iterations: 3 })).toMatchObject({
       decision: "PAUSE_NO_PROGRESS", progress: { kind: "unchanged", repeated: ["same"] },
     });
   });
 
   it("pauses a stable length-2 or length-3 cycle", () => {
     const engine = new FeedbackEngine({ now });
-    expect(engine.evaluate([result("test", "failed", [issue("b")])], [entry(["a"]), entry(["b"]), entry(["a"])], "", { iterations: 4 })).toMatchObject({
+    const unchangedDiff = "diff --git a/src/a.ts b/src/a.ts";
+    expect(engine.evaluate([result("test", "failed", [issue("b")])], [entry(["a"]), entry(["b"]), entry(["a"])], unchangedDiff, { iterations: 4 })).toMatchObject({
       decision: "PAUSE_NO_PROGRESS", progress: { kind: "oscillating", cycleLength: 2 },
     });
     expect(engine.evaluate([result("test", "failed", [issue("c")])], [
       entry(["a"]), entry(["b"]), entry(["c"]), entry(["a"]), entry(["b"]),
-    ], "", { iterations: 6 })).toMatchObject({
+    ], unchangedDiff, { iterations: 6 })).toMatchObject({
       decision: "PAUSE_NO_PROGRESS", progress: { kind: "oscillating", cycleLength: 3 },
     });
   });
 
   it("uses stable infrastructure, success, budget, then stall decision priority", () => {
-    const exhausted = new FeedbackEngine({ now, budget: { maxIterations: 1, maxDurationMs: 10, maxTokens: 10, maxCostUsd: 1 } });
+    const exhausted = new FeedbackEngine({ now, enabledValidators: ["test"], budget: { maxIterations: 1, maxDurationMs: 10, maxTokens: 10, maxCostUsd: 1 } });
     const usage = { iterations: 1, elapsedMs: 10, inputTokens: 10, outputTokens: 0, costUsd: 1 };
 
     expect(exhausted.evaluate([result("test", "infrastructure_error", [issue("infra", "ENOENT", "INFRASTRUCTURE_ERROR")])], [], "", usage).decision).toBe("FAIL_INFRASTRUCTURE");
@@ -121,5 +139,17 @@ describe("FeedbackEngine", () => {
     expect(Buffer.byteLength(feedback.summary, "utf8")).toBeLessThanOrEqual(8_192);
     for (const secret of secrets) expect(JSON.stringify(feedback)).not.toContain(secret);
     expect(feedback.summary).toContain("[REDACTED]");
+    expect(feedback.issues.length).toBeLessThanOrEqual(100);
+    expect(feedback.summary).not.toContain("fp-199");
+  });
+
+  it("does not pause when the failure is stable but each round has a meaningful code diff", () => {
+    const engine = new FeedbackEngine({ now });
+    const current = [result("test", "failed", [issue("same")])];
+
+    expect(engine.evaluate(current, [
+      entry(["same"], "-const value = 0;\n+const value = 1;"),
+      entry(["same"], "-const value = 1;\n+const value = 2;"),
+    ], "-const value = 2;\n+const value = 3;", { iterations: 3 }).decision).toBe("CONTINUE");
   });
 });
